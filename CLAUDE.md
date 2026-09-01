@@ -24,8 +24,8 @@ acceptance criterion before the next one is started. The active implementation p
 - `work/<slug>/` — gitignored, fully regenerable working files per song: separated stems,
   resolved lyrics, alignment word timestamps, the generated `.ass`, a burn-in preview clip, and
   the final `.mkv`. Never commit anything here — rerun the relevant CLI stage instead.
-- `legacy/` — the original prototype, kept for reference: `align.py` (the old flat script) and
-  `example_song/` (its sample input/output files).
+- `legacy/` — `align.py`, the original flat prototype script, kept for reference only (its old
+  sample input/output files were dropped, not migrated).
 - `.venv/` — the single consolidated virtualenv (Python 3.12). Install everything with
   `pip install -e .` from `pyproject.toml`.
 - `tests/` — pytest unit tests for pure logic (e.g. `text_utils`), no audio/model dependencies.
