@@ -15,7 +15,7 @@ dependencies = [
     "pyannote.audio",
     "audio-separator",
     "audioread",
-    "ctc-forced-aligner",
+    "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git",
     "pymkv2",
     "mutagen",
     "requests",
