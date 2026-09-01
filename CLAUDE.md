@@ -94,8 +94,11 @@ WhisperX) and correct known weaknesses in it:
    shaping/ordering, composited over the video via ffmpeg) instead of depending on a subtitle
    renderer's own `\k` logic. Flagged as future work, not yet implemented.
 5. **Mux** (`mux.py`) — `pymkv2`/`mkvmerge`: background video + instrumental audio (default
-   track) + isolated vocal audio (secondary, non-default) + the `.ass` subtitles, with correct
-   ISO 639-2 language tags.
+   track) + isolated vocal audio (secondary, non-default) + the `.ass` subtitles (default track),
+   all tagged `language_ietf="he"` (BCP 47) rather than a hand-computed ISO 639-2 code - modern
+   mkvmerge writes the new `LanguageIETF` element from this and derives the legacy `heb`
+   `Language` element from it automatically. Validated on `or_caze` in VLC: instrumental default,
+   vocals present but not selected, subtitles synced, Hebrew shown as the track language.
 
 ## Why `legacy/align.py` isn't used as a reference
 
