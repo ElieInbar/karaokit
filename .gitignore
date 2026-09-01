@@ -1,0 +1,9 @@
+.venv/
+work/
+__pycache__/
+*.py[cod]
+*.wav
+*.mp4
+*.mkv
+*.egg-info/
+.DS_Store

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "karaoke-he"
+version = "0.1.0"
+description = "Pipeline de generation de videos karaoke pour des chansons en hebreu"
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+    "torchaudio",
+    "whisperx",
+    "stable-ts",
+    "pyannote.audio",
+    "audio-separator",
+    "audioread",
+    "ctc-forced-aligner",
+    "pymkv2",
+    "mutagen",
+    "requests",
+    "typer",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
