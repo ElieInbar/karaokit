@@ -22,5 +22,9 @@ dependencies = [
     "typer",
 ]
 
+[project.optional-dependencies]
+deploy = ["modal"]
+dev = ["pytest"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
