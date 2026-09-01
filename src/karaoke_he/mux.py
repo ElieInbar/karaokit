@@ -16,17 +16,23 @@ def mux_video(
     background_video: Path,
     instrumental_path: Path,
     vocals_path: Path,
-    subtitles_path: Path,
     output_path: Path,
     *,
+    subtitles_path: Path | None = None,
     language: str = DEFAULT_LANGUAGE,
 ) -> Path:
-    for label, path in (
+    """`subtitles_path` is optional: the karaoke highlight is now hard-burned into
+    `background_video` by `subtitle_render.py` rather than carried as a soft `.ass` track (see
+    CLAUDE.md), so most callers won't pass one. It's kept as an option for a plain-text fallback
+    subtitle track if one is ever wanted alongside the burned-in video."""
+    required = [
         ("background video", background_video),
         ("instrumental audio", instrumental_path),
         ("vocals audio", vocals_path),
-        ("subtitles", subtitles_path),
-    ):
+    ]
+    if subtitles_path is not None:
+        required.append(("subtitles", subtitles_path))
+    for label, path in required:
         if not Path(path).is_file():
             raise FileNotFoundError(f"{label} not found: {path}")
 
@@ -51,14 +57,15 @@ def mux_video(
             default_track=False,
         )
     )
-    mkv.add_track(
-        MKVTrack(
-            str(subtitles_path),
-            track_name="Karaoke",
-            language_ietf=language,
-            default_track=True,
+    if subtitles_path is not None:
+        mkv.add_track(
+            MKVTrack(
+                str(subtitles_path),
+                track_name="Karaoke",
+                language_ietf=language,
+                default_track=True,
+            )
         )
-    )
 
     exit_code = mkv.mux(str(output_path), silent=True)
     if exit_code not in (0, 1):  # mkvmerge: 0 = ok, 1 = ok with warnings, 2 = error

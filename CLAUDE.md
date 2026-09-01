@@ -6,24 +6,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A karaoke-video pipeline for Hebrew songs, rebuilt as a proper git repo + Python package after an
 earlier single-script prototype (now under `legacy/`). Given a song, it separates vocals from
-instrumental, resolves synced/plain lyrics, force-aligns them to the vocal track, emits an ASS
-karaoke subtitle file (right-to-left aware), and muxes everything into a final `.mkv`. The
-project is built and validated one module at a time — each module has its own manual test and
-acceptance criterion before the next one is started. The active implementation plan lives at
+instrumental, resolves synced/plain lyrics, force-aligns them to the vocal track, renders an
+animated word-by-word karaoke highlight (right-to-left aware) hard-burned onto the background
+video, and muxes everything into a final `.mkv`. The project is built and validated one module at
+a time — each module has its own manual test and acceptance criterion before the next one is
+started. The active implementation plan lives at
 `/Users/elieinbar/.claude/plans/refactored-hugging-owl.md`.
 
 ## Layout
 
 - `src/karaoke_he/` — the package. One module per pipeline stage: `separation.py`, `lyrics.py`,
   `text_utils.py` (Hebrew nikud/orthography normalization, shared by lyrics/alignment/subtitles),
-  `alignment.py`, `subtitles.py`, `mux.py`. `src/karaoke_he/cli/` holds one Typer CLI per stage
-  for manual, isolated testing (`python -m karaoke_he.cli.<stage>`).
+  `alignment.py`, `subtitles.py` (plain-text `.ass` generation, no longer the primary rendering
+  path - see Subtitles below), `subtitle_render.py` (the animated karaoke overlay, hard-burned
+  into the video), `mux.py`. `src/karaoke_he/cli/` holds one Typer CLI per stage for manual,
+  isolated testing (`python -m karaoke_he.cli.<stage>`).
 - `songs/<slug>/` — small, git-tracked, human-authored inputs per song: `meta.json`
   (artist/title/album/duration) and `lyrics.txt` (manual lyrics fallback used when the song isn't
   on LRCLIB). `songs/or_caze/` is the current working example.
 - `work/<slug>/` — gitignored, fully regenerable working files per song: separated stems,
-  resolved lyrics, alignment word timestamps, the generated `.ass`, a burn-in preview clip, and
-  the final `.mkv`. Never commit anything here — rerun the relevant CLI stage instead.
+  resolved lyrics, alignment word timestamps, the rendered subtitle overlay and the
+  background-with-subtitles video, and the final `.mkv`. Never commit anything here — rerun the
+  relevant CLI stage instead.
 - `legacy/` — `align.py`, the original flat prototype script, kept for reference only (its old
   sample input/output files were dropped, not migrated).
 - `.venv/` — the single consolidated virtualenv (Python 3.12). Install everything with
@@ -72,7 +76,7 @@ WhisperX) and correct known weaknesses in it:
    `heb` language code), not WhisperX's wav2vec2 path (only an unofficial, non-vetted community
    Hebrew checkpoint exists for it). `stable_whisper`/`stable-ts` is kept as a fallback/comparison
    method.
-4. **Subtitles** (`subtitles.py`) — libass has a known, unresolved bug
+4. **Subtitles** (`subtitles.py` + `subtitle_render.py`) — libass has a known, unresolved bug
    ([libass#406](https://github.com/libass/libass/issues/406)) where `\k` karaoke fill always
    progresses left-to-right regardless of BiDi display direction; wrapping text in RLE/PDF
    Unicode marks (the old `legacy/align.py` approach) does not fix this, and no reliable
@@ -80,25 +84,30 @@ WhisperX) and correct known weaknesses in it:
    `\c`-based per-word recoloring workaround (stacked `Dialogue` events per word boundary) was
    tried and *visually* validated by burn-in, but tagging every word with its own override split
    each line into many small bidi runs and made word order visibly unstable between events on
-   closer inspection (in motion, not just single frames) - not worth the complexity. The current
-   `subtitles.py` emits one plain-text `Dialogue` event per lyric line (no highlight, no `\k`,
-   no `\c`), correctly RTL/LTR-placed by ordinary (non-buggy) bidi, timed with a research-backed
-   lead-in (see below).
+   closer inspection (in motion, not just single frames) - not worth the complexity.
+   `subtitles.py` still generates a plain-text `.ass` (one `Dialogue` event per line, no
+   highlight) as a kept-for-reference/fallback path, but it is **not the primary rendering path
+   any more**.
 
-   **Known limitation / planned improvement**: this gives up the word-by-word karaoke highlight
-   entirely. Research into how professional/commercial tools do this (VEED, Filmora, an After
-   Effects karaoke-animator script, etc.) shows they don't rely on ASS/libass's `\k` rendering at
-   all - they either have their own text-compositing engine or pre-render the animation into real
-   video frames. The equivalent for this all-Python pipeline would be rendering each frame's
-   highlight overlay ourselves (Pillow + `arabic_reshaper` + `python-bidi` for correct Hebrew
-   shaping/ordering, composited over the video via ffmpeg) instead of depending on a subtitle
-   renderer's own `\k` logic. Flagged as future work, not yet implemented.
-5. **Mux** (`mux.py`) — `pymkv2`/`mkvmerge`: background video + instrumental audio (default
-   track) + isolated vocal audio (secondary, non-default) + the `.ass` subtitles (default track),
-   all tagged `language_ietf="he"` (BCP 47) rather than a hand-computed ISO 639-2 code - modern
-   mkvmerge writes the new `LanguageIETF` element from this and derives the legacy `heb`
-   `Language` element from it automatically. Validated on `or_caze` in VLC: instrumental default,
-   vocals present but not selected, subtitles synced, Hebrew shown as the track language.
+   The primary path is `subtitle_render.py`: it renders the karaoke highlight itself, frame by
+   frame, as an RGBA image sequence (Pillow, `+stroke` outline; Hebrew needs no
+   `arabic_reshaper`-style contextual shaping, but Pillow here has no `libraqm`, so BiDi visual
+   ordering is computed manually per line-chunk via `python-bidi`'s `get_display`), piped
+   straight into `ffmpeg` as an alpha-channel ProRes 4444 `.mov` (`render_overlay_video`). That
+   overlay is then composited onto the background video with ffmpeg's `overlay` filter
+   (`burn_overlay`), hard-burning the highlight into the video track - sidestepping `\k`/libass
+   entirely rather than fighting it. Highlighting is a short (~150ms) colour crossfade per word
+   rather than an instant swap, since the instant-swap `.ass` version looked cheap/jarring in
+   motion even though individual frames were correct. Validated on `or_caze`'s full ~4-minute
+   overlay (rendered in ~2m20s) composited and played back in VLC.
+5. **Mux** (`mux.py`) — `pymkv2`/`mkvmerge`: the (already subtitle-burned) video + instrumental
+   audio (default track) + isolated vocal audio (secondary, non-default), tagged
+   `language_ietf="he"` (BCP 47) rather than a hand-computed ISO 639-2 code - modern mkvmerge
+   writes the new `LanguageIETF` element from this and derives the legacy `heb` `Language`
+   element from it automatically. `subtitles_path` is accepted but optional, for a plain-text
+   `.ass` track alongside the burned-in video if one is ever wanted; it's normally omitted since
+   the highlight is already in the picture. Validated on `or_caze` in VLC: instrumental default,
+   vocals present but not selected, Hebrew shown as the track language.
 
 ## Why `legacy/align.py` isn't used as a reference
 

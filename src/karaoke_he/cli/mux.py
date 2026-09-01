@@ -12,17 +12,18 @@ app = typer.Typer(add_completion=False)
 @app.command()
 def main(
     song_slug: str = typer.Option(..., "--song-slug", help="Working directory name under work/"),
-    background_video: Path = typer.Option(..., "--background-video", exists=True),
+    video: Path = typer.Option(
+        ..., "--video", exists=True, help="Background video, with the karaoke overlay already burned in"
+    ),
     language: str = typer.Option(DEFAULT_LANGUAGE, "--language", help="BCP 47 language tag"),
 ) -> None:
     work_dir = PROJECT_ROOT / "work" / song_slug
 
     try:
         output_path = mux_video(
-            background_video,
+            video,
             work_dir / "stems" / "instrumental.wav",
             work_dir / "stems" / "vocals.wav",
-            work_dir / "subtitles" / "karaoke.ass",
             work_dir / "mux" / f"{song_slug}_karaoke.mkv",
             language=language,
         )

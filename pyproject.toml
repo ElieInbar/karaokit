@@ -20,6 +20,8 @@ dependencies = [
     "mutagen",
     "requests",
     "typer",
+    "pillow",
+    "python-bidi",
 ]
 
 [project.optional-dependencies]
