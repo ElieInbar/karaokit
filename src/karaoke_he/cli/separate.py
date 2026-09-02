@@ -3,7 +3,7 @@ from pathlib import Path
 
 import typer
 
-from karaoke_he.separation import DEFAULT_MODEL, separate_audio
+from karaoke_he.separation import DEFAULT_MODEL, separate_audio, separate_audio_remote
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -16,7 +16,10 @@ def main(
     song_slug: str = typer.Option(..., "--song-slug", help="Working directory name under work/"),
     model_name: str = typer.Option(DEFAULT_MODEL, "--model-name"),
     overwrite: bool = typer.Option(False, "--overwrite"),
-    cpu: bool = typer.Option(False, "--cpu", help="Force CPU inference instead of MPS"),
+    cpu: bool = typer.Option(False, "--cpu", help="Force CPU inference instead of MPS (local only)"),
+    remote: bool = typer.Option(
+        False, "--remote", help="Run on the Modal-deployed GPU function instead of locally"
+    ),
 ) -> None:
     work_dir = PROJECT_ROOT / "work" / song_slug
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -25,13 +28,18 @@ def main(
     if overwrite or not local_input.exists():
         shutil.copy2(input, local_input)
 
-    result = separate_audio(
-        local_input,
-        work_dir / "stems",
-        model_name=model_name,
-        overwrite=overwrite,
-        force_cpu=cpu,
-    )
+    if remote:
+        result = separate_audio_remote(
+            local_input, work_dir / "stems", model_name=model_name, overwrite=overwrite
+        )
+    else:
+        result = separate_audio(
+            local_input,
+            work_dir / "stems",
+            model_name=model_name,
+            overwrite=overwrite,
+            force_cpu=cpu,
+        )
 
     typer.echo(f"model: {result.model_name}")
     typer.echo(f"source duration: {result.duration_sec:.1f}s")

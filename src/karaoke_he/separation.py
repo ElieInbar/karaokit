@@ -66,6 +66,53 @@ def separate_audio(
     _resolve(output_dir, vocals_out).replace(vocals_path)
     _resolve(output_dir, instrumental_out).replace(instrumental_path)
 
+    _validate_stem_durations(vocals_path, instrumental_path, source_duration, model_name)
+    return SeparationResult(vocals_path, instrumental_path, model_name, source_duration)
+
+
+def separate_audio_remote(
+    input_audio: Path,
+    output_dir: Path,
+    *,
+    model_name: str = DEFAULT_MODEL,
+    overwrite: bool = False,
+    app_name: str = "karaoke-he-separation",
+    function_name: str = "separate_remote",
+) -> SeparationResult:
+    """Same contract as `separate_audio`, but runs on the Modal-deployed GPU function
+    (`deploy/modal_app.py`) instead of locally - ~2 minutes on an A10G vs. ~30 minutes on this
+    machine's MPS. Requires `modal deploy deploy/modal_app.py` to have been run at least once;
+    `modal` itself is only needed for this path, so it's imported lazily here rather than being a
+    hard dependency of the whole package.
+    """
+    input_audio = Path(input_audio)
+    output_dir = Path(output_dir)
+    if not input_audio.is_file():
+        raise FileNotFoundError(f"Input audio not found: {input_audio}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    vocals_path = output_dir / "vocals.wav"
+    instrumental_path = output_dir / "instrumental.wav"
+    source_duration = sf.info(str(input_audio)).duration
+
+    if not overwrite and vocals_path.exists() and instrumental_path.exists():
+        return SeparationResult(vocals_path, instrumental_path, model_name, source_duration)
+
+    import modal
+
+    separate_remote_fn = modal.Function.from_name(app_name, function_name)
+    stems = separate_remote_fn.remote(input_audio.read_bytes(), input_audio.name, model_name)
+
+    vocals_path.write_bytes(stems["vocals.wav"])
+    instrumental_path.write_bytes(stems["instrumental.wav"])
+
+    _validate_stem_durations(vocals_path, instrumental_path, source_duration, model_name)
+    return SeparationResult(vocals_path, instrumental_path, model_name, source_duration)
+
+
+def _validate_stem_durations(
+    vocals_path: Path, instrumental_path: Path, source_duration: float, model_name: str
+) -> None:
     for label, path in (("vocals", vocals_path), ("instrumental", instrumental_path)):
         duration = sf.info(str(path)).duration
         if abs(duration - source_duration) > DURATION_TOLERANCE_SEC:
@@ -73,8 +120,6 @@ def separate_audio(
                 f"{label} duration ({duration:.1f}s) does not match source "
                 f"({source_duration:.1f}s) for model {model_name!r}"
             )
-
-    return SeparationResult(vocals_path, instrumental_path, model_name, source_duration)
 
 
 def _find_stem(output_files: list[str], keyword: str) -> str | None:

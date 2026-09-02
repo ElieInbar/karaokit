@@ -67,7 +67,16 @@ These choices came out of a state-of-the-art audit of the original plan (Demucs 
 WhisperX) and correct known weaknesses in it:
 
 1. **Separation** (`separation.py`) — `audio-separator` with a BS-Roformer/Mel-Band-Roformer
-   checkpoint, not Demucs v4 (lower SDR).
+   checkpoint, not Demucs v4 (lower SDR). `separate_audio()` runs it locally (~20-30 min on this
+   Mac's MPS - BS-Roformer has no efficient flash-attention kernel there, and MPS was also
+   observed to slow down progressively and die silently on long runs, hence `force_cpu` as a
+   fallback). For anything latency-sensitive (the target app needs closer to real-time),
+   `separate_audio_remote()` calls the same model via the Modal-deployed GPU function in
+   `deploy/modal_app.py` instead (~2m20s on an A10G) - same `SeparationResult` contract, `modal`
+   imported lazily so it's not a hard dependency of the local-only path. The Modal app must be
+   deployed once with `modal deploy deploy/modal_app.py` (redeploy after changing that file);
+   `cli/separate.py --remote` then calls the already-deployed function directly via
+   `modal.Function.from_name(...)`, without needing `modal run` at all.
 2. **Lyrics** (`lyrics.py`) — LRCLIB first (free, no API key, often pre-synced), falling back to
    the manual `songs/<slug>/lyrics.txt` file rather than scraping Genius. Hebrew lyrics must be
    normalized (`text_utils.normalize_hebrew`: strip nikud, NFC) before any text matching, since
