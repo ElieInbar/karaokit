@@ -3,7 +3,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from karaoke_he.alignment import align_lyrics, summarize_low_confidence_regions
+from karaoke_he.alignment import (
+    align_lyrics,
+    load_diagnostic_model,
+    summarize_low_confidence_regions,
+    transcribe_diagnostic_region,
+)
 from karaoke_he.lyrics import LyricsNotFoundError, resolve_lyrics
 from karaoke_he.mux import mux_video
 from karaoke_he.separation import separate_audio_remote
@@ -14,6 +19,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 # Placeholder background: point 3 of the roadmap (a real background video) is deliberately
 # deferred - see CLAUDE.md. Generated fresh per job since each song has a different duration.
 PLACEHOLDER_BACKGROUND_COLOR = "0x1a1a2e"
+
+# Minimum region size (in low-confidence words) worth running diagnostic language-ID on. Tested
+# on a real song: single isolated words are usually just ordinary alignment noise, and Whisper's
+# language detection on a clip that short is unreliable (wildly different, implausible languages
+# guessed for different 1-word blips in the same song) - not worth surfacing at all below this.
+MIN_WORDS_FOR_DIAGNOSIS = 3
 
 
 class PipelineError(RuntimeError):
@@ -27,7 +38,7 @@ class PipelineResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def _format_low_confidence_warnings(words) -> list[str]:
+def _format_low_confidence_warnings(words, vocals_path: Path) -> list[str]:
     """Turns `alignment.summarize_low_confidence_regions` into user-facing warning strings (in
     French, matching the current frontend locale - see CLAUDE.md for the pending English
     translation of the whole app, not done piecemeal here).
@@ -36,13 +47,38 @@ def _format_low_confidence_warnings(words) -> list[str]:
     the *entire* audio - if the audio actually contains something the lyrics text doesn't
     account for (a spoken passage, a foreign-language aside, an extra chorus repeat), nearby
     words get shoved to implausible timestamps instead of the pipeline just failing loudly.
+
+    Each *substantial* region (>= `MIN_WORDS_FOR_DIAGNOSIS` words - see that constant) also gets
+    its spoken language auto-detected (`transcribe_diagnostic_region`), since "somewhere around
+    here is off" is much less actionable than "the audio here doesn't sound like the song's
+    declared language". Isolated 1-2 word regions are skipped: tested on a real song, Whisper's
+    language ID on a clip that short is unreliable (wildly different, implausible languages
+    guessed for single-word blips that are more likely just ordinary alignment noise) - only
+    worth trusting, even loosely, once there's a few seconds of real audio to work with. The
+    transcribed text itself is never included in the warning (it may be part of the song's
+    actual, possibly copyrighted content), only the detected language, and even that is presented
+    as a hint rather than a fact, since language ID on sung (not spoken) audio is inherently less
+    reliable than its usual speech use case.
     """
-    return [
-        f"Timing incertain vers {region.start:.0f}s-{region.end:.0f}s ({region.word_count} mot"
-        f"{'s' if region.word_count != 1 else ''}) - l'audio contient probablement du contenu "
-        "parlé ou non chanté absent des paroles récupérées."
-        for region in summarize_low_confidence_regions(words)
-    ]
+    regions = summarize_low_confidence_regions(words)
+    if not regions:
+        return []
+
+    model = None
+    warnings = []
+    for region in regions:
+        detail = ""
+        if region.word_count >= MIN_WORDS_FOR_DIAGNOSIS:
+            model = model or load_diagnostic_model()
+            language, text = transcribe_diagnostic_region(model, vocals_path, region.start, region.end)
+            if text:
+                detail = f" — langue probable (indicatif, peu fiable sur du chant) : {language}"
+        warnings.append(
+            f"Timing incertain vers {region.start:.0f}s-{region.end:.0f}s ({region.word_count} mot"
+            f"{'s' if region.word_count != 1 else ''}) - l'audio contient probablement du contenu "
+            f"parlé ou non chanté absent des paroles récupérées{detail}."
+        )
+    return warnings
 
 
 def _generate_placeholder_background(duration: float, output_path: Path) -> Path:
@@ -123,7 +159,7 @@ def run_pipeline(
 
     on_progress("aligning")
     words = align_lyrics(separation.vocals_path, lyrics_result.text)
-    warnings = _format_low_confidence_warnings(words)
+    warnings = _format_low_confidence_warnings(words, separation.vocals_path)
 
     on_progress("rendering_subtitles")
     background_path = _generate_placeholder_background(

@@ -54,6 +54,34 @@ class LowConfidenceRegion:
     word_count: int
 
 
+def transcribe_diagnostic_region(
+    model, vocals_path: Path, start: float, end: float, padding: float = 1.0
+) -> tuple[str, str]:
+    """Auto-transcribes one time range of the vocals track and returns (detected_language,
+    text) - a diagnostic aid for a `LowConfidenceRegion`, not part of the main alignment path.
+
+    Unlike `ctc-forced-aligner`, which is only ever given the song's one declared language,
+    Whisper detects the spoken language itself, which is exactly what's useful when a
+    low-confidence region turns out to be a spoken aside or a passage in another language that
+    the forced aligner had no way to represent (see CLAUDE.md's `ממעמקים` example) - forced
+    alignment can't tell you *what* is actually being said in a region it's unsure about, only
+    *that* it's unsure. Pass in an already-loaded model (`load_diagnostic_model`) so multiple
+    regions in the same song don't each pay the model-load cost again.
+    """
+    clip_start = max(0.0, start - padding)
+    result = model.transcribe(str(vocals_path), clip_timestamps=[clip_start, end + padding], verbose=False)
+    return result.language, result.text.strip()
+
+
+def load_diagnostic_model(model_name: str = "base"):
+    """Loads the `stable_whisper` model used by `transcribe_diagnostic_region`. Lazy import:
+    this diagnostic path is the only thing in the package that needs `stable_whisper`, so it
+    shouldn't be a hard dependency of ordinary forced alignment."""
+    import stable_whisper
+
+    return stable_whisper.load_model(model_name)
+
+
 def summarize_low_confidence_regions(
     words: list[WordTimestamp], threshold: float = LOW_CONFIDENCE_SCORE, gap_sec: float = 5.0
 ) -> list[LowConfidenceRegion]:

@@ -100,24 +100,35 @@ WhisperX) and correct known weaknesses in it:
    ASR output never carries nikud.
 3. **Alignment** (`alignment.py`) — `ctc-forced-aligner` (Meta MMS, native Hebrew support via the
    `heb` language code), not WhisperX's wav2vec2 path (only an unofficial, non-vetted community
-   Hebrew checkpoint exists for it). `stable_whisper`/`stable-ts` is kept as a fallback/comparison
-   method.
+   Hebrew checkpoint exists for it).
 
    Forced alignment must map every lyric word somewhere across the *entire* audio, so when the
    audio actually contains something the fetched lyrics text doesn't account for - a spoken
    passage, a foreign-language aside, an extra unwritten chorus repeat - nearby real words get
    shoved to implausible timestamps instead of the pipeline failing loudly (found on a real song,
-   `ממעמקים` / Idan Raichel, which has a spoken passage in another language partway through that
-   isn't part of the transcribed lyrics). `low_confidence_words()` already flags individual words
-   whose acoustic score is far below the rest (see `LOW_CONFIDENCE_SCORE`'s own calibration note);
+   `ממעמקים` / Idan Raichel, which has a spoken passage partway through that isn't part of the
+   transcribed lyrics). `low_confidence_words()` already flags individual words whose acoustic
+   score is far below the rest (see `LOW_CONFIDENCE_SCORE`'s own calibration note);
    `summarize_low_confidence_regions()` groups those into contiguous time ranges instead of a flat
    per-word list, since dozens of low-confidence words are often really just one or two real
    trouble spots. `web/pipeline.py`'s `run_pipeline()` surfaces these as `PipelineResult.warnings`
    (shown to the user in the web UI) - this **detects and surfaces** the problem, it does not fix
-   the underlying misalignment; the CLI (`cli/align.py`) prints the same regions to stderr. There
-   is no automatic fix for this class of error (it would need audio segmentation/language-ID to
-   exclude the offending stretch before alignment, not attempted) - the practical mitigation is
-   for the user to notice the warning and adjust the manual lyrics fallback for that stretch.
+   the underlying misalignment (that would need audio segmentation to exclude the offending
+   stretch before alignment, not attempted); the CLI (`cli/align.py`) prints the same regions to
+   stderr.
+
+   `stable_whisper`/`stable-ts` (originally kept as a plain fallback/comparison aligner, per the
+   old plan) is now used for exactly one thing: `load_diagnostic_model()` +
+   `transcribe_diagnostic_region()` auto-transcribe a flagged region to detect its spoken
+   language, since "somewhere around here is off" is far less actionable than "this doesn't sound
+   like the song's declared language". The transcribed text itself is deliberately never surfaced
+   (only the detected language) - it's possibly-copyrighted content, and doesn't need to be to be
+   useful. Tested on `ממעמקים`: Whisper's language ID is unreliable on short/isolated clips
+   (wildly different, implausible languages guessed for different single-word blips in the same
+   song) and language-ID is inherently weaker on sung audio than its usual speech use case, so
+   `web/pipeline.py`'s `MIN_WORDS_FOR_DIAGNOSIS` only runs this for regions with several words
+   (skipping likely-noise 1-2 word blips entirely), and the warning phrases the result as a hint,
+   not a fact.
 4. **Subtitles** (`subtitles.py` + `subtitle_render.py`) — libass has a known, unresolved bug
    ([libass#406](https://github.com/libass/libass/issues/406)) where `\k` karaoke fill always
    progresses left-to-right regardless of BiDi display direction; wrapping text in RLE/PDF
