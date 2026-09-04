@@ -129,6 +129,21 @@ WhisperX) and correct known weaknesses in it:
    `web/pipeline.py`'s `MIN_WORDS_FOR_DIAGNOSIS` only runs this for regions with several words
    (skipping likely-noise 1-2 word blips entirely), and the warning phrases the result as a hint,
    not a fact.
+
+   `try_correct_alignment()` is the actual-fix attempt (not just detection): splice the
+   substantial low-confidence region(s) out of the vocals audio, re-run `align_lyrics` with the
+   same unchanged text against the trimmed audio, remap the resulting timestamps back onto the
+   original timeline, and only keep the result if it's provably better (same word count, still
+   monotonic, *and* strictly fewer low-confidence words than before) - otherwise silently fall
+   back to the original alignment, so this can never make things worse for the caller. Tested on
+   `ממעמקים`: it did **not** help in practice (52 low-confidence words after vs. 43 before,
+   monotonic and word-count-matched, so the safety net correctly rejected it and fell back) -
+   splicing out multiple ranges introduces new discontinuities at each cut point, and the
+   resulting artifacts apparently confuse the acoustic model more than the untranscribed content
+   did. The safety net did its job (no regression shipped), but the splice-and-realign technique
+   itself needs more work before it's a real fix - e.g. crossfading the cut points instead of a
+   hard splice, or correcting one region at a time instead of all of them in a single trimmed
+   file - not attempted yet.
 4. **Subtitles** (`subtitles.py` + `subtitle_render.py`) — libass has a known, unresolved bug
    ([libass#406](https://github.com/libass/libass/issues/406)) where `\k` karaoke fill always
    progresses left-to-right regardless of BiDi display direction; wrapping text in RLE/PDF

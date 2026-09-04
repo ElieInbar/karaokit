@@ -1,7 +1,10 @@
+import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+import soundfile as sf
 import torch
 from ctc_forced_aligner import (
     generate_emissions,
@@ -102,6 +105,112 @@ def summarize_low_confidence_regions(
         else:
             regions.append(LowConfidenceRegion(word.start, word.end, 1))
     return regions
+
+
+@dataclass
+class AudioSplice:
+    """Maps a timestamp in a trimmed audio file (with some ranges cut out) back to where that
+    same instant was in the original, untrimmed audio."""
+
+    kept_ranges: list[tuple[float, float]] = field(default_factory=list)  # (orig_start, orig_end)
+
+    def to_original_time(self, trimmed_time: float) -> float:
+        cursor = 0.0
+        for orig_start, orig_end in self.kept_ranges:
+            seg_len = orig_end - orig_start
+            if trimmed_time <= cursor + seg_len:
+                return orig_start + (trimmed_time - cursor)
+            cursor += seg_len
+        return self.kept_ranges[-1][1] if self.kept_ranges else trimmed_time
+
+
+def _build_trimmed_audio(
+    input_path: Path, exclude_ranges: list[tuple[float, float]], output_path: Path
+) -> AudioSplice:
+    """Writes `output_path` as `input_path` with each (start, end) range in `exclude_ranges`
+    spliced out (silently concatenating what's before and after), and returns the mapping needed
+    to translate timestamps computed on that trimmed file back to original-audio time."""
+    data, sample_rate = sf.read(str(input_path))
+    duration = len(data) / sample_rate
+
+    kept_ranges: list[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in sorted(exclude_ranges):
+        start = max(cursor, min(start, duration))
+        end = max(start, min(end, duration))
+        if start > cursor:
+            kept_ranges.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < duration:
+        kept_ranges.append((cursor, duration))
+
+    chunks = [data[int(round(s * sample_rate)) : int(round(e * sample_rate))] for s, e in kept_ranges]
+    trimmed = np.concatenate(chunks) if chunks else np.empty(0, dtype=data.dtype)
+    sf.write(str(output_path), trimmed, sample_rate)
+    return AudioSplice(kept_ranges=kept_ranges)
+
+
+def try_correct_alignment(
+    vocals_path: Path,
+    lyrics_text: str,
+    words: list[WordTimestamp],
+    *,
+    language: str = DEFAULT_LANGUAGE,
+    force_cpu: bool = False,
+    min_words: int = 5,
+    padding_sec: float = 0.5,
+) -> list[WordTimestamp]:
+    """Attempts to fix substantial low-confidence regions (>= `min_words`) by splicing them out
+    of the vocals audio and re-running forced alignment with the *same, unchanged* lyrics text
+    against that trimmed audio, then mapping the resulting timestamps back onto the original
+    timeline.
+
+    The premise: forced alignment must place every word somewhere across the *entire* audio, so
+    an untranscribed stretch (spoken aside, foreign-language passage, unwritten extra chorus)
+    makes it smear nearby real words across too much time; removing that stretch lets the
+    remaining audio duration match the text again, so those words should snap back to a tighter,
+    more accurate placement. This assumes the flagged words themselves *are* genuine lyrics, just
+    externally mistimed - their text is never touched or dropped, only the audio is cut.
+
+    Never applied blindly: only accepted if the corrected alignment (a) still has the same word
+    count, (b) is still monotonic, and (c) actually has fewer low-confidence words than the
+    original - if the "fix" doesn't demonstrably help (or re-alignment on the trimmed audio fails
+    outright), the original `words` are returned untouched.
+    """
+    regions = [r for r in summarize_low_confidence_regions(words) if r.word_count >= min_words]
+    if not regions:
+        return words
+
+    exclude_ranges = [(r.start - padding_sec, r.end + padding_sec) for r in regions]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        trimmed_path = Path(tmp) / "trimmed.wav"
+        splice = _build_trimmed_audio(vocals_path, exclude_ranges, trimmed_path)
+        try:
+            new_words = align_lyrics(trimmed_path, lyrics_text, language=language, force_cpu=force_cpu)
+        except AlignmentError:
+            return words
+
+    if len(new_words) != len(words):
+        return words
+
+    remapped = [
+        WordTimestamp(word=w.word, start=splice.to_original_time(w.start), end=splice.to_original_time(w.end), score=w.score)
+        for w in new_words
+    ]
+
+    prev_end = -1.0
+    for word in remapped:
+        if word.end < word.start or word.start < prev_end:
+            return words
+        prev_end = word.end
+
+    old_weak_count = len(low_confidence_words(words))
+    new_weak_count = len(low_confidence_words(remapped))
+    if new_weak_count >= old_weak_count:
+        return words
+
+    return remapped
 
 
 def _validate_alignment(words: list[WordTimestamp], expected_word_count: int) -> None:

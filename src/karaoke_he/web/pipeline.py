@@ -8,6 +8,7 @@ from karaoke_he.alignment import (
     load_diagnostic_model,
     summarize_low_confidence_regions,
     transcribe_diagnostic_region,
+    try_correct_alignment,
 )
 from karaoke_he.lyrics import LyricsNotFoundError, resolve_lyrics
 from karaoke_he.mux import mux_video
@@ -159,6 +160,7 @@ def run_pipeline(
 
     on_progress("aligning")
     words = align_lyrics(separation.vocals_path, lyrics_result.text)
+    words = try_correct_alignment(separation.vocals_path, lyrics_result.text, words)
     warnings = _format_low_confidence_warnings(words, separation.vocals_path)
 
     on_progress("rendering_subtitles")
