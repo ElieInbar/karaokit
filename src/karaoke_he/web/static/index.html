@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>karaoke_he</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px; color: #1a1a2e; }
+  h1 { font-size: 1.4rem; }
+  label { display: block; margin-top: 12px; font-size: 0.9rem; font-weight: 600; }
+  input[type=text], input[type=file], textarea { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; font-family: inherit; }
+  button { margin-top: 20px; padding: 10px 20px; font-size: 1rem; cursor: pointer; }
+  #status { margin-top: 24px; padding: 12px; border-radius: 6px; background: #f0f0f5; display: none; }
+  #status.error { background: #fde2e2; }
+  #status.done { background: #e2fde5; }
+  video { width: 100%; margin-top: 12px; }
+  a.download { display: inline-block; margin-top: 8px; }
+  .warnings { margin-top: 12px; padding: 10px; background: #fff6d9; border-radius: 4px; font-size: 0.85rem; }
+  .warnings ul { margin: 4px 0 0; padding-left: 20px; }
+</style>
+</head>
+<body>
+<h1>karaoke_he</h1>
+<form id="job-form">
+  <label>Fichier audio<input type="file" name="file" accept="audio/*" required></label>
+  <label>Artiste<input type="text" name="artist" required></label>
+  <label>Titre<input type="text" name="title" required></label>
+  <label>Album (optionnel)<input type="text" name="album"></label>
+  <label>Paroles (optionnel — à remplir seulement si la chanson n'est pas trouvée sur LRCLIB)
+    <textarea name="lyrics" rows="6" dir="rtl" placeholder="Colle ici les paroles si tu obtiens une erreur « paroles introuvables »"></textarea>
+  </label>
+  <button type="submit">Générer le karaoké</button>
+</form>
+
+<div id="status"></div>
+
+<script>
+const STAGE_LABELS = {
+  queued: "En attente...",
+  separating: "Séparation audio (GPU, ~2-3 min)...",
+  lyrics: "Récupération des paroles...",
+  aligning: "Alignement des paroles sur la voix...",
+  rendering_subtitles: "Rendu du surlignage karaoké...",
+  muxing: "Assemblage de la vidéo finale...",
+  done: "Terminé !",
+  error: "Erreur",
+};
+
+const form = document.getElementById("job-form");
+const statusDiv = document.getElementById("status");
+let pollTimer = null;
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  clearInterval(pollTimer);
+  const formData = new FormData(form);
+  form.querySelector("button").disabled = true;
+
+  statusDiv.style.display = "block";
+  statusDiv.className = "";
+  statusDiv.textContent = "Envoi...";
+
+  let jobId;
+  try {
+    const res = await fetch("/jobs", { method: "POST", body: formData });
+    if (!res.ok) throw new Error(await res.text());
+    ({ job_id: jobId } = await res.json());
+  } catch (err) {
+    statusDiv.className = "error";
+    statusDiv.textContent = "Erreur à l'envoi : " + err.message;
+    form.querySelector("button").disabled = false;
+    return;
+  }
+
+  pollTimer = setInterval(async () => {
+    const res = await fetch(`/jobs/${jobId}`);
+    const job = await res.json();
+
+    if (job.status === "error") {
+      clearInterval(pollTimer);
+      statusDiv.className = "error";
+      let message = STAGE_LABELS.error + " : " + job.error;
+      if (job.error && job.error.includes("No lyrics found")) {
+        message += "<br><br>Colle les paroles dans le champ « Paroles » ci-dessus et relance — " +
+          "la séparation déjà faite sera réutilisée, ça ira plus vite cette fois.";
+      }
+      statusDiv.innerHTML = message;
+      form.querySelector("button").disabled = false;
+      return;
+    }
+
+    if (job.done) {
+      clearInterval(pollTimer);
+      statusDiv.className = "done";
+      let html = STAGE_LABELS.done + "<br>" +
+        `<a class="download" href="/jobs/${jobId}/video" download>Télécharger la vidéo (.mkv)</a>` +
+        `<video controls src="/jobs/${jobId}/video"></video>`;
+      if (job.warnings && job.warnings.length) {
+        html += `<div class="warnings">⚠️ ${job.warnings.length} passage(s) à vérifier :` +
+          `<ul>${job.warnings.map(w => `<li>${w}</li>`).join("")}</ul></div>`;
+      }
+      statusDiv.innerHTML = html;
+      form.querySelector("button").disabled = false;
+      return;
+    }
+
+    statusDiv.textContent = STAGE_LABELS[job.status] || job.status;
+  }, 3000);
+});
+</script>
+</body>
+</html>

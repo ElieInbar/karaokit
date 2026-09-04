@@ -22,6 +22,9 @@ dependencies = [
     "typer",
     "pillow",
     "python-bidi",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
 ]
 
 [project.optional-dependencies]

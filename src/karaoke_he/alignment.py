@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,8 +41,39 @@ def low_confidence_words(words: list[WordTimestamp], threshold: float = LOW_CONF
     """Words the acoustic model itself is unsure about - typically the tail of a forced
     alignment run, when audio continues (instrumental bleed, wordless vocalizing) past the last
     real lyric: the model still has to place the remaining tokens somewhere, so their position
-    can be far from where they're actually sung. A low score is the signal to distrust it."""
+    can be far from where they're actually sung. A low score is the signal to distrust it. The
+    same pattern can also show up in the *middle* of a song - e.g. a spoken or foreign-language
+    passage that isn't in the fetched lyrics text at all - not just at the tail end."""
     return [word for word in words if word.score < threshold]
+
+
+@dataclass
+class LowConfidenceRegion:
+    start: float
+    end: float
+    word_count: int
+
+
+def summarize_low_confidence_regions(
+    words: list[WordTimestamp], threshold: float = LOW_CONFIDENCE_SCORE, gap_sec: float = 5.0
+) -> list[LowConfidenceRegion]:
+    """Groups `low_confidence_words` into contiguous time regions (merging words less than
+    `gap_sec` apart) instead of a flat list - a song can have dozens of individually
+    low-confidence words clustered around just one or two real trouble spots (e.g. one spoken
+    passage in another language), and a per-word listing obscures that shape."""
+    weak = low_confidence_words(words, threshold)
+    if not weak:
+        return []
+
+    regions = [LowConfidenceRegion(weak[0].start, weak[0].end, 1)]
+    for word in weak[1:]:
+        current = regions[-1]
+        if word.start - current.end <= gap_sec:
+            current.end = word.end
+            current.word_count += 1
+        else:
+            regions.append(LowConfidenceRegion(word.start, word.end, 1))
+    return regions
 
 
 def _validate_alignment(words: list[WordTimestamp], expected_word_count: int) -> None:
@@ -72,6 +104,7 @@ def align_lyrics(
     language: str = DEFAULT_LANGUAGE,
     force_cpu: bool = False,
     batch_size: int = 4,
+    on_progress: Callable[[str], None] = lambda message: None,
 ) -> list[WordTimestamp]:
     vocals_path = Path(vocals_path)
     if not vocals_path.is_file():
@@ -91,11 +124,19 @@ def align_lyrics(
         device = "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
 
+    on_progress("loading alignment model")
     model, tokenizer = load_alignment_model(device, dtype=dtype)
+
+    on_progress("loading vocals audio")
     audio_waveform = load_audio(str(vocals_path), model.dtype, model.device)
+
+    on_progress("running acoustic model")
     emissions, stride = generate_emissions(model, audio_waveform, batch_size=batch_size)
 
+    on_progress("preparing text")
     tokens_starred, text_starred = preprocess_text(text, romanize=True, language=language)
+
+    on_progress("computing alignment")
     segments, scores, blank_token = get_alignments(emissions, tokens_starred, tokenizer)
     spans = get_spans(tokens_starred, segments, blank_token)
     raw_words = postprocess_results(text_starred, spans, stride, scores)

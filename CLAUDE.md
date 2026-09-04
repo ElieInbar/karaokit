@@ -10,8 +10,15 @@ instrumental, resolves synced/plain lyrics, force-aligns them to the vocal track
 animated word-by-word karaoke highlight (right-to-left aware) hard-burned onto the background
 video, and muxes everything into a final `.mkv`. The project is built and validated one module at
 a time — each module has its own manual test and acceptance criterion before the next one is
-started. The active implementation plan lives at
-`/Users/elieinbar/.claude/plans/refactored-hugging-owl.md`.
+started. The original per-stage implementation plan lives at
+`/Users/elieinbar/.claude/plans/refactored-hugging-owl.md` (jalons 0-5, all done).
+
+On top of the CLI pipeline there is now a local web app (`src/karaoke_he/web/`, see Layout below)
+that orchestrates the whole thing end to end from a browser: upload a song + artist/title, poll
+job status, download the finished `.mkv`. A follow-up plan for that app (multi-language support,
+detailed per-stage progress, a visual redesign, translating the frontend to English) is written up
+at `/Users/elieinbar/.claude/plans/temporal-kindling-valley.md` but **not yet implemented** - don't
+assume any of it is done without checking that plan/the actual code first.
 
 ## Layout
 
@@ -21,6 +28,16 @@ started. The active implementation plan lives at
   path - see Subtitles below), `subtitle_render.py` (the animated karaoke overlay, hard-burned
   into the video), `mux.py`. `src/karaoke_he/cli/` holds one Typer CLI per stage for manual,
   isolated testing (`python -m karaoke_he.cli.<stage>`).
+- `src/karaoke_he/web/` — the local web app that orchestrates all of the above into one job:
+  `pipeline.py`'s `run_pipeline()` calls each stage function in sequence (unchanged - no logic is
+  duplicated here) and returns a `PipelineResult` (output path + any alignment low-confidence
+  warnings, see Alignment below); `jobs.py` runs it in a background thread per upload with an
+  in-memory `Job` (no persistence - job history is lost on server restart, acceptable for the
+  current personal-use-only scope); `app.py` is the FastAPI app (`POST /jobs`, `GET /jobs/{id}`,
+  `GET /jobs/{id}/video`); `static/index.html` is a single dependency-free HTML/CSS/JS page
+  (currently French - see the pending plan above for translating it). Run locally with
+  `uvicorn karaoke_he.web.app:app --host 127.0.0.1 --port 8000`, then open
+  `http://127.0.0.1:8000`. Uses `separate_audio_remote` (Modal), never the local `separate_audio`.
 - `songs/<slug>/` — small, git-tracked, human-authored inputs per song: `meta.json`
   (artist/title/album/duration) and `lyrics.txt` (manual lyrics fallback used when the song isn't
   on LRCLIB). `songs/or_caze/` is the current working example.
@@ -85,6 +102,22 @@ WhisperX) and correct known weaknesses in it:
    `heb` language code), not WhisperX's wav2vec2 path (only an unofficial, non-vetted community
    Hebrew checkpoint exists for it). `stable_whisper`/`stable-ts` is kept as a fallback/comparison
    method.
+
+   Forced alignment must map every lyric word somewhere across the *entire* audio, so when the
+   audio actually contains something the fetched lyrics text doesn't account for - a spoken
+   passage, a foreign-language aside, an extra unwritten chorus repeat - nearby real words get
+   shoved to implausible timestamps instead of the pipeline failing loudly (found on a real song,
+   `ממעמקים` / Idan Raichel, which has a spoken passage in another language partway through that
+   isn't part of the transcribed lyrics). `low_confidence_words()` already flags individual words
+   whose acoustic score is far below the rest (see `LOW_CONFIDENCE_SCORE`'s own calibration note);
+   `summarize_low_confidence_regions()` groups those into contiguous time ranges instead of a flat
+   per-word list, since dozens of low-confidence words are often really just one or two real
+   trouble spots. `web/pipeline.py`'s `run_pipeline()` surfaces these as `PipelineResult.warnings`
+   (shown to the user in the web UI) - this **detects and surfaces** the problem, it does not fix
+   the underlying misalignment; the CLI (`cli/align.py`) prints the same regions to stderr. There
+   is no automatic fix for this class of error (it would need audio segmentation/language-ID to
+   exclude the offending stretch before alignment, not attempted) - the practical mitigation is
+   for the user to notice the warning and adjust the manual lyrics fallback for that stretch.
 4. **Subtitles** (`subtitles.py` + `subtitle_render.py`) — libass has a known, unresolved bug
    ([libass#406](https://github.com/libass/libass/issues/406)) where `\k` karaoke fill always
    progresses left-to-right regardless of BiDi display direction; wrapping text in RLE/PDF
