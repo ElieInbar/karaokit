@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from karaoke_he.alignment import WordTimestamp
+from karaoke_he.text_utils import strip_display_punctuation
 
 # Standard karaoke convention: show a line roughly a second before it needs to be sung, so
 # viewers notice it before they need to start reading it.
@@ -37,7 +38,7 @@ class SubtitleLine:
 
     @property
     def text(self) -> str:
-        return " ".join(w.word for w in self.words)
+        return " ".join(strip_display_punctuation(w.word) for w in self.words)
 
 
 def group_words_by_line(lyrics_lines: list[str], words: list[WordTimestamp]) -> list[SubtitleLine]:

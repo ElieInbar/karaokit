@@ -181,6 +181,18 @@ WhisperX) and correct known weaknesses in it:
    rather than an instant swap, since the instant-swap `.ass` version looked cheap/jarring in
    motion even though individual frames were correct. Validated on `or_caze`'s full ~4-minute
    overlay (rendered in ~2m20s) composited and played back in VLC.
+
+   Displayed words go through `text_utils.strip_display_punctuation` first (strips leading/
+   trailing punctuation only, e.g. a raw fetched-lyrics token like `"(nanana,"` - backing-vocal
+   ad-libs are often wrapped in parentheses in the source text - renders as `"nanana"`; interior
+   characters like a French `j'ai`'s apostrophe are untouched). This is a display-only transform:
+   `WordTimestamp.word` itself, and the text fed into `align_lyrics`/`try_correct_alignment`, keep
+   the original punctuation, since alignment must see exactly what it originally tokenized.
+   Known unaddressed limitation in the same area: forced alignment assumes one sequential vocal
+   stream, so backing vocals/ad-libs that are genuinely sung *simultaneously* with the main line
+   (rather than sequentially, in a gap) have no way to be represented - the aligner places them
+   one after another regardless, which can skew timing on that stretch. Same failure class as the
+   `ממעמקים` case above, just triggered by overlapping vocals instead of missing lyrics text.
 5. **Mux** (`mux.py`) — `pymkv2`/`mkvmerge`: the (already subtitle-burned) video + instrumental
    audio (default track) + isolated vocal audio (secondary, non-default), tagged
    `language_ietf="he"` (BCP 47) rather than a hand-computed ISO 639-2 code - modern mkvmerge

@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 from karaoke_he.alignment import WordTimestamp
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.subtitles import SubtitleLine, _line_display_start, group_words_by_line
+from karaoke_he.text_utils import strip_display_punctuation
 
 # Covers Latin + Hebrew + Arabic + Cyrillic (and more) in one file, so every currently supported
 # language renders correctly without a per-language font map.
@@ -81,9 +82,13 @@ def render_line_frame(
     active = next((w for w in line.words if w.start <= t < w.end), None)
     unsung_start = sung_count + (1 if active else 0)
 
-    sung_text = _to_display_text(" ".join(w.word for w in line.words[:sung_count]), language)
-    unsung_text = _to_display_text(" ".join(w.word for w in line.words[unsung_start:]), language)
-    active_text = _to_display_text(active.word, language) if active else ""
+    sung_text = _to_display_text(
+        " ".join(strip_display_punctuation(w.word) for w in line.words[:sung_count]), language
+    )
+    unsung_text = _to_display_text(
+        " ".join(strip_display_punctuation(w.word) for w in line.words[unsung_start:]), language
+    )
+    active_text = _to_display_text(strip_display_punctuation(active.word), language) if active else ""
     active_color = (
         _lerp_color(BASE_COLOR, HIGHLIGHT_COLOR, (t - active.start) / TRANSITION_SEC) if active else BASE_COLOR
     )

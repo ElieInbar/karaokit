@@ -76,6 +76,19 @@ def test_generate_ass_second_line_does_not_overlap_first():
     assert second_line_start >= first_line_end
 
 
+def test_subtitle_line_text_strips_display_punctuation():
+    words = [_w("(ouh,", 0.0, 0.5), _w("nanana)", 0.5, 1.0)]
+    line = SubtitleLine(words=words)
+    assert line.text == "ouh nanana"
+
+
+def test_generate_ass_strips_display_punctuation_from_dialogue_text():
+    words = [_w("(ouh,", 5.0, 5.5), _w("nanana)", 5.5, 6.0)]
+    ass = generate_ass(["(ouh, nanana)"], words)
+    dialogue = [line for line in ass.splitlines() if line.startswith("Dialogue:")][0]
+    assert dialogue.endswith("ouh nanana")
+
+
 def test_generate_ass_extends_lead_in_for_fast_short_lines():
     words = [_w("שלום עולם שוב היום", 10.0, 10.1)]
     long_line = SubtitleLine(words=words)

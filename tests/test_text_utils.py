@@ -1,6 +1,6 @@
 import unicodedata
 
-from karaoke_he.text_utils import normalize_hebrew, strip_nikud
+from karaoke_he.text_utils import normalize_hebrew, strip_display_punctuation, strip_nikud
 
 
 def test_strip_nikud_removes_points():
@@ -28,3 +28,26 @@ def test_normalize_hebrew_applies_nfc():
 def test_normalize_hebrew_idempotent():
     text = "כמה כוכבים שנפלו עכשיו"
     assert normalize_hebrew(text) == normalize_hebrew(normalize_hebrew(text))
+
+
+def test_strip_display_punctuation_removes_wrapping_parentheses():
+    assert strip_display_punctuation("(word)") == "word"
+
+
+def test_strip_display_punctuation_removes_leading_and_trailing_marks():
+    assert strip_display_punctuation("(word,") == "word"
+    assert strip_display_punctuation("word)") == "word"
+    assert strip_display_punctuation('"word"') == "word"
+
+
+def test_strip_display_punctuation_keeps_internal_apostrophes():
+    assert strip_display_punctuation("j'ai") == "j'ai"
+    assert strip_display_punctuation("qu'on") == "qu'on"
+
+
+def test_strip_display_punctuation_leaves_plain_word_unchanged():
+    assert strip_display_punctuation("word") == "word"
+
+
+def test_strip_display_punctuation_leaves_hebrew_word_unchanged():
+    assert strip_display_punctuation("שלום") == "שלום"
