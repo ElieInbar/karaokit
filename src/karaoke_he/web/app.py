@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
+from karaoke_he.lyrics import search_suggestions
 from karaoke_he.web.jobs import create_job, get_job
 
 app = FastAPI(title="karaoke_he")
@@ -24,6 +25,17 @@ def _slugify(text: str) -> str:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/api/suggestions")
+def suggestions_endpoint(q: str = "") -> list[dict]:
+    """Backs the artist/title autocomplete dropdown. Proxied through the backend (rather than
+    the frontend calling LRCLIB directly) so the API key/rate-limit story stays server-side and
+    the response can be trimmed to just what the dropdown needs."""
+    return [
+        {"artist": s.artist, "title": s.title, "album": s.album, "duration_sec": s.duration_sec}
+        for s in search_suggestions(q)
+    ]
 
 
 @app.post("/jobs")

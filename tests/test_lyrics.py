@@ -6,6 +6,7 @@ from karaoke_he.lyrics import (
     _lyrics_result_from_lrclib_payload,
     fetch_from_lrclib,
     load_manual_fallback,
+    search_suggestions,
     strip_synced_timestamps,
 )
 
@@ -108,3 +109,95 @@ def test_fetch_from_lrclib_retries_with_track_name_only_and_picks_closest_durati
     assert result.text == "אור כזה"
     assert calls[1][1] == {"artist_name": "עידן רייכל", "track_name": "אור כזה"}
     assert calls[2][1] == {"track_name": "אור כזה"}
+
+
+def test_search_suggestions_returns_empty_list_for_blank_query():
+    assert search_suggestions("   ") == []
+
+
+def test_search_suggestions_uses_generic_q_param(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append((url, params))
+        return _FakeResponse(200, [])
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    search_suggestions("idan rai")
+
+    assert calls == [(f"{lyrics_module.LRCLIB_BASE_URL}/search", {"q": "idan rai"})]
+
+
+def test_search_suggestions_extracts_only_non_lyrics_fields(monkeypatch):
+    def fake_get(url, params=None, timeout=None):
+        return _FakeResponse(
+            200,
+            [
+                {
+                    "artistName": "Artist One",
+                    "trackName": "Song One",
+                    "albumName": "Album One",
+                    "duration": 200.0,
+                    "plainLyrics": "should never appear in a suggestion",
+                    "syncedLyrics": "[00:00.00]should never appear either",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    results = search_suggestions("artist one")
+
+    assert len(results) == 1
+    assert results[0].artist == "Artist One"
+    assert results[0].title == "Song One"
+    assert results[0].album == "Album One"
+    assert results[0].duration_sec == 200.0
+    assert not hasattr(results[0], "plainLyrics")
+    assert not hasattr(results[0], "syncedLyrics")
+
+
+def test_search_suggestions_dedupes_by_artist_and_title(monkeypatch):
+    def fake_get(url, params=None, timeout=None):
+        return _FakeResponse(
+            200,
+            [
+                {"artistName": "A", "trackName": "B", "albumName": "Album 1", "duration": 100.0},
+                {"artistName": "A", "trackName": "B", "albumName": "Album 2 (Remaster)", "duration": 101.0},
+                {"artistName": "A", "trackName": "C", "duration": 102.0},
+            ],
+        )
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    results = search_suggestions("a")
+
+    assert len(results) == 2
+    assert [(r.artist, r.title) for r in results] == [("A", "B"), ("A", "C")]
+
+
+def test_search_suggestions_skips_entries_missing_artist_or_title(monkeypatch):
+    def fake_get(url, params=None, timeout=None):
+        return _FakeResponse(
+            200,
+            [
+                {"artistName": None, "trackName": "B"},
+                {"artistName": "A", "trackName": None},
+                {"artistName": "A", "trackName": "B"},
+            ],
+        )
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    results = search_suggestions("a")
+
+    assert len(results) == 1
+
+
+def test_search_suggestions_respects_limit(monkeypatch):
+    def fake_get(url, params=None, timeout=None):
+        return _FakeResponse(
+            200, [{"artistName": f"Artist {i}", "trackName": f"Song {i}"} for i in range(20)]
+        )
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    results = search_suggestions("a", limit=3)
+
+    assert len(results) == 3

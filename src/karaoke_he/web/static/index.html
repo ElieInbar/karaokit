@@ -111,6 +111,40 @@
   .row { display: flex; gap: 12px; }
   .row > .field { flex: 1; }
 
+  .autocomplete { position: relative; }
+
+  .suggestions {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 4px;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    max-height: 260px;
+    overflow-y: auto;
+  }
+
+  .suggestions[hidden] { display: none; }
+
+  .suggestions li {
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+
+  .suggestions li .s-title { font-weight: 600; }
+  .suggestions li .s-artist { color: var(--text-secondary); }
+  .suggestions li .s-album { color: var(--text-secondary); font-size: 0.8rem; }
+
+  .suggestions li:hover, .suggestions li.active { background: var(--track-bg); }
+
   button {
     width: 100%;
     margin-top: 8px;
@@ -222,13 +256,15 @@
     </div>
 
     <div class="row">
-      <div class="field">
+      <div class="field autocomplete">
         <label for="artist">Artist</label>
-        <input type="text" id="artist" name="artist" required>
+        <input type="text" id="artist" name="artist" autocomplete="off" required>
+        <ul class="suggestions" id="artist-suggestions" hidden></ul>
       </div>
-      <div class="field">
+      <div class="field autocomplete">
         <label for="title">Title</label>
-        <input type="text" id="title" name="title" required>
+        <input type="text" id="title" name="title" autocomplete="off" required>
+        <ul class="suggestions" id="title-suggestions" hidden></ul>
       </div>
     </div>
 
@@ -289,6 +325,99 @@ const ALIGN_SUBSTEPS = [
   "preparing text",
   "computing alignment",
 ];
+
+// --- Artist/title autocomplete (backed by /api/suggestions -> LRCLIB search) ---
+
+function setupAutocomplete(inputId, listId) {
+  const input = document.getElementById(inputId);
+  const list = document.getElementById(listId);
+  const artistInput = document.getElementById("artist");
+  const titleInput = document.getElementById("title");
+  const albumInput = document.getElementById("album");
+
+  let debounceTimer = null;
+  let abortController = null;
+  let activeIndex = -1;
+
+  function hide() {
+    list.hidden = true;
+    list.innerHTML = "";
+    activeIndex = -1;
+  }
+
+  function render(suggestions) {
+    list.innerHTML = "";
+    suggestions.forEach((s, i) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<div class="s-title">${escapeHtml(s.title)}</div>` +
+        `<div class="s-artist">${escapeHtml(s.artist)}</div>` +
+        (s.album ? `<div class="s-album">${escapeHtml(s.album)}</div>` : "");
+      li.addEventListener("mousedown", (e) => {
+        // mousedown (not click) so this fires before the input's blur event hides the list.
+        e.preventDefault();
+        artistInput.value = s.artist;
+        titleInput.value = s.title;
+        if (s.album) albumInput.value = s.album;
+        hide();
+      });
+      list.appendChild(li);
+    });
+    list.hidden = suggestions.length === 0;
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function updateActive() {
+    [...list.children].forEach((li, i) => li.classList.toggle("active", i === activeIndex));
+  }
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    const query = [artistInput.value, titleInput.value].map(v => v.trim()).filter(Boolean).join(" ");
+    if (query.length < 2) {
+      hide();
+      return;
+    }
+    debounceTimer = setTimeout(async () => {
+      if (abortController) abortController.abort();
+      abortController = new AbortController();
+      try {
+        const res = await fetch(`/api/suggestions?q=${encodeURIComponent(query)}`, { signal: abortController.signal });
+        if (!res.ok) return;
+        render(await res.json());
+      } catch (err) {
+        if (err.name !== "AbortError") hide();
+      }
+    }, 300);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (list.hidden) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      activeIndex = Math.min(activeIndex + 1, list.children.length - 1);
+      updateActive();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      activeIndex = Math.max(activeIndex - 1, -1);
+      updateActive();
+    } else if (e.key === "Enter" && activeIndex >= 0) {
+      e.preventDefault();
+      list.children[activeIndex].dispatchEvent(new MouseEvent("mousedown"));
+    } else if (e.key === "Escape") {
+      hide();
+    }
+  });
+
+  input.addEventListener("blur", hide);
+}
+
+setupAutocomplete("artist", "artist-suggestions");
+setupAutocomplete("title", "title-suggestions");
 
 function progressPercent(stage, detail) {
   if (!detail) return null;

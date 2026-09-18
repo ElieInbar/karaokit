@@ -89,6 +89,53 @@ def fetch_from_lrclib(
     return None
 
 
+@dataclass
+class SongSuggestion:
+    artist: str
+    title: str
+    album: str | None
+    duration_sec: float | None
+
+
+def search_suggestions(query: str, *, limit: int = 8, timeout: float = 5.0) -> list[SongSuggestion]:
+    """Autocomplete suggestions for an artist/title search box, backed by LRCLIB's generic `q`
+    search (matches across both artist and track name, unlike `fetch_from_lrclib`'s exact
+    artist_name/track_name params). Deliberately returns only artist/title/album/duration - never
+    plainLyrics/syncedLyrics, which the raw LRCLIB payload also carries - since this is just for
+    picking *which* song, not for the lyrics themselves.
+    """
+    query = query.strip()
+    if not query:
+        return []
+
+    response = requests.get(f"{LRCLIB_BASE_URL}/search", params={"q": query}, timeout=timeout)
+    response.raise_for_status()
+
+    seen: set[tuple[str, str]] = set()
+    suggestions = []
+    for candidate in response.json():
+        artist = candidate.get("artistName")
+        title = candidate.get("trackName")
+        if not artist or not title:
+            continue
+        key = (artist, title)
+        if key in seen:
+            continue
+        seen.add(key)
+        suggestions.append(
+            SongSuggestion(
+                artist=artist,
+                title=title,
+                album=candidate.get("albumName"),
+                duration_sec=candidate.get("duration"),
+            )
+        )
+        if len(suggestions) >= limit:
+            break
+
+    return suggestions
+
+
 def load_manual_fallback(song_slug: str, songs_dir: Path) -> LyricsResult | None:
     lyrics_path = Path(songs_dir) / song_slug / "lyrics.txt"
     if not lyrics_path.is_file():
