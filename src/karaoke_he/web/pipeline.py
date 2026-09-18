@@ -10,10 +10,12 @@ from karaoke_he.alignment import (
     transcribe_diagnostic_region,
     try_correct_alignment,
 )
+from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import LyricsNotFoundError, resolve_lyrics
 from karaoke_he.mux import mux_video
 from karaoke_he.separation import separate_audio_remote
 from karaoke_he.subtitle_render import burn_overlay, render_overlay_video
+from karaoke_he.text_utils import normalize_hebrew
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -115,28 +117,36 @@ def run_pipeline(
     *,
     album: str | None = None,
     manual_lyrics: str | None = None,
-    on_progress: Callable[[str], None] = lambda stage: None,
+    language: str = DEFAULT_LANGUAGE,
+    on_progress: Callable[[str, str | None], None] = lambda stage, detail: None,
 ) -> PipelineResult:
     """Runs the full song -> karaoke .mkv pipeline, reusing each already-validated stage
     unchanged: separation (Modal GPU), lyrics resolution, forced alignment, the animated
-    subtitle overlay, and muxing. `on_progress` is called with a short stage name before each
-    stage starts, for a caller (the web job runner) to surface status.
+    subtitle overlay, and muxing. `on_progress(stage, detail)` is called with a short stage name
+    before each stage starts (`detail=None`), and again with a finer-grained `detail` string
+    whenever a stage itself reports progress (separation's "NN%", alignment's named sub-steps,
+    subtitle rendering's "NN%"), for a caller (the web job runner) to surface status.
 
     `manual_lyrics`, if given, is written to `songs/<song_slug>/lyrics.txt` before resolving
     lyrics, so it's picked up by `resolve_lyrics`'s existing LRCLIB-then-manual-fallback logic
     unchanged - this is how a user unblocks a song LRCLIB doesn't have without touching the
     filesystem directly, since the "fully automatic" pipeline otherwise has no way to ask for
     lyrics mid-run.
+
+    `language` is one of `languages.LANGUAGES`'s keys (an ISO-639-3 code); the caller (`jobs.py`)
+    is expected to have already validated it.
     """
     work_dir = PROJECT_ROOT / "work" / song_slug
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    on_progress("separating")
+    on_progress("separating", None)
     local_input = work_dir / f"input{Path(input_audio).suffix}"
     local_input.write_bytes(Path(input_audio).read_bytes())
-    separation = separate_audio_remote(local_input, work_dir / "stems")
+    separation = separate_audio_remote(
+        local_input, work_dir / "stems", on_progress=lambda msg: on_progress("separating", msg)
+    )
 
-    on_progress("lyrics")
+    on_progress("lyrics", None)
     if manual_lyrics:
         song_dir = PROJECT_ROOT / "songs" / song_slug
         song_dir.mkdir(parents=True, exist_ok=True)
@@ -153,32 +163,55 @@ def run_pipeline(
     except LyricsNotFoundError as exc:
         raise PipelineError(str(exc)) from exc
 
+    lang_config = LANGUAGES[language]
+    lyrics_text = lyrics_result.text
+    if lang_config.strip_nikud:
+        # Must normalize before both the line-split and align_lyrics below, so the two sides of
+        # subtitles.group_words_by_line's word-count check see the identical text - normalizing
+        # only one side would break that invariant.
+        lyrics_text = normalize_hebrew(lyrics_text)
+
     lyrics_dir = work_dir / "lyrics"
     lyrics_dir.mkdir(parents=True, exist_ok=True)
-    (lyrics_dir / "final.txt").write_text(lyrics_result.text + "\n", encoding="utf-8")
-    lyrics_lines = [line for line in lyrics_result.text.splitlines() if line.strip()]
+    (lyrics_dir / "final.txt").write_text(lyrics_text + "\n", encoding="utf-8")
+    lyrics_lines = [line for line in lyrics_text.splitlines() if line.strip()]
 
-    on_progress("aligning")
-    words = align_lyrics(separation.vocals_path, lyrics_result.text)
-    words = try_correct_alignment(separation.vocals_path, lyrics_result.text, words)
+    on_progress("aligning", None)
+    words = align_lyrics(
+        separation.vocals_path,
+        lyrics_text,
+        language=lang_config.iso639_3,
+        on_progress=lambda msg: on_progress("aligning", msg),
+    )
+    words = try_correct_alignment(
+        separation.vocals_path, lyrics_text, words, language=lang_config.iso639_3
+    )
     warnings = _format_low_confidence_warnings(words, separation.vocals_path)
 
-    on_progress("rendering_subtitles")
+    on_progress("rendering_subtitles", None)
     background_path = _generate_placeholder_background(
         separation.duration_sec, work_dir / "mux" / "background.mp4"
     )
     overlay_path = work_dir / "subtitles" / "overlay.mov"
     composited_path = work_dir / "subtitles" / "background_with_subs.mp4"
-    render_overlay_video(lyrics_lines, words, overlay_path, duration=separation.duration_sec)
+    render_overlay_video(
+        lyrics_lines,
+        words,
+        overlay_path,
+        duration=separation.duration_sec,
+        language=language,
+        on_progress=lambda msg: on_progress("rendering_subtitles", msg),
+    )
     burn_overlay(background_path, overlay_path, composited_path)
 
-    on_progress("muxing")
+    on_progress("muxing", None)
     output_path = mux_video(
         composited_path,
         separation.instrumental_path,
         separation.vocals_path,
         work_dir / "mux" / f"{song_slug}_karaoke.mkv",
+        language=lang_config.bcp47,
     )
 
-    on_progress("done")
+    on_progress("done", None)
     return PipelineResult(output_path=output_path, warnings=warnings)

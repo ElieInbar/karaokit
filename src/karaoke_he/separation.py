@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,12 +79,18 @@ def separate_audio_remote(
     overwrite: bool = False,
     app_name: str = "karaoke-he-separation",
     function_name: str = "separate_remote",
+    on_progress: Callable[[str], None] = lambda message: None,
 ) -> SeparationResult:
     """Same contract as `separate_audio`, but runs on the Modal-deployed GPU function
     (`deploy/modal_app.py`) instead of locally - ~2 minutes on an A10G vs. ~30 minutes on this
     machine's MPS. Requires `modal deploy deploy/modal_app.py` to have been run at least once;
     `modal` itself is only needed for this path, so it's imported lazily here rather than being a
     hard dependency of the whole package.
+
+    `separate_remote` is a Modal *generator* function: it yields `"NN%"` progress strings (parsed
+    server-side from audio-separator's own tqdm output, since it has no first-class progress
+    callback) as separation runs, then a final `{"vocals.wav": ..., "instrumental.wav": ...}`
+    dict. `on_progress` is called with each progress string as it arrives.
     """
     input_audio = Path(input_audio)
     output_dir = Path(output_dir)
@@ -101,7 +108,15 @@ def separate_audio_remote(
     import modal
 
     separate_remote_fn = modal.Function.from_name(app_name, function_name)
-    stems = separate_remote_fn.remote(input_audio.read_bytes(), input_audio.name, model_name)
+    stems: dict[str, bytes] | None = None
+    for item in separate_remote_fn.remote_gen(input_audio.read_bytes(), input_audio.name, model_name):
+        if isinstance(item, dict):
+            stems = item
+        else:
+            on_progress(str(item))
+
+    if stems is None:
+        raise SeparationError("Modal separation function ended without producing stems.")
 
     vocals_path.write_bytes(stems["vocals.wav"])
     instrumental_path.write_bytes(stems["instrumental.wav"])

@@ -4,21 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A karaoke-video pipeline for Hebrew songs, rebuilt as a proper git repo + Python package after an
-earlier single-script prototype (now under `legacy/`). Given a song, it separates vocals from
-instrumental, resolves synced/plain lyrics, force-aligns them to the vocal track, renders an
-animated word-by-word karaoke highlight (right-to-left aware) hard-burned onto the background
-video, and muxes everything into a final `.mkv`. The project is built and validated one module at
-a time — each module has its own manual test and acceptance criterion before the next one is
-started. The original per-stage implementation plan lives at
-`/Users/elieinbar/.claude/plans/refactored-hugging-owl.md` (jalons 0-5, all done).
+A karaoke-video pipeline, originally built Hebrew-only and now supporting six languages (Hebrew,
+English, French, Spanish, Russian, Arabic - see `languages.py`), rebuilt as a proper git repo +
+Python package after an earlier single-script prototype (now under `legacy/`). Given a song, it
+separates vocals from instrumental, resolves synced/plain lyrics, force-aligns them to the vocal
+track, renders an animated word-by-word karaoke highlight (direction-aware: RTL for Hebrew/Arabic,
+LTR otherwise) hard-burned onto the background video, and muxes everything into a final `.mkv`.
+The project is built and validated one module at a time — each module has its own manual test and
+acceptance criterion before the next one is started. The original per-stage implementation plan
+lives at `/Users/elieinbar/.claude/plans/refactored-hugging-owl.md` (jalons 0-5, all done).
 
-On top of the CLI pipeline there is now a local web app (`src/karaoke_he/web/`, see Layout below)
-that orchestrates the whole thing end to end from a browser: upload a song + artist/title, poll
-job status, download the finished `.mkv`. A follow-up plan for that app (multi-language support,
-detailed per-stage progress, a visual redesign, translating the frontend to English) is written up
-at `/Users/elieinbar/.claude/plans/temporal-kindling-valley.md` but **not yet implemented** - don't
-assume any of it is done without checking that plan/the actual code first.
+On top of the CLI pipeline there is a local web app (`src/karaoke_he/web/`, see Layout below) that
+orchestrates the whole thing end to end from a browser: upload a song + artist/title/language,
+watch live per-stage progress, download the finished `.mkv`. The follow-up plan for that app
+(multi-language support, detailed per-stage progress including true Modal streaming, a visual
+redesign, translating the frontend to English) at
+`/Users/elieinbar/.claude/plans/temporal-kindling-valley.md` has now been **implemented** - see the
+Multi-language support and web app subsections below for what actually shipped vs. the original
+plan (a couple of details changed during implementation, e.g. a real RTL/LTR layout bug the plan
+didn't anticipate).
 
 ## Layout
 
@@ -28,14 +32,23 @@ assume any of it is done without checking that plan/the actual code first.
   path - see Subtitles below), `subtitle_render.py` (the animated karaoke overlay, hard-burned
   into the video), `mux.py`. `src/karaoke_he/cli/` holds one Typer CLI per stage for manual,
   isolated testing (`python -m karaoke_he.cli.<stage>`).
-- `src/karaoke_he/web/` — the local web app that orchestrates all of the above into one job:
-  `pipeline.py`'s `run_pipeline()` calls each stage function in sequence (unchanged - no logic is
-  duplicated here) and returns a `PipelineResult` (output path + any alignment low-confidence
-  warnings, see Alignment below); `jobs.py` runs it in a background thread per upload with an
-  in-memory `Job` (no persistence - job history is lost on server restart, acceptable for the
-  current personal-use-only scope); `app.py` is the FastAPI app (`POST /jobs`, `GET /jobs/{id}`,
-  `GET /jobs/{id}/video`); `static/index.html` is a single dependency-free HTML/CSS/JS page
-  (currently French - see the pending plan above for translating it). Run locally with
+- `src/karaoke_he/languages.py` — the single source of truth for the 6 supported languages
+  (`LANGUAGES: dict[str, LanguageConfig]`, keyed by ISO-639-3 code, the format
+  `ctc-forced-aligner` wants natively). Each `LanguageConfig` also carries the BCP 47 tag for
+  `mux.py`, `strip_nikud`/`arabic_shaping` flags, and `is_rtl` - see Multi-language support below.
+- `src/karaoke_he/web/` — the local web app (English UI) that orchestrates all of the above into
+  one job: `pipeline.py`'s `run_pipeline()` calls each stage function in sequence (unchanged - no
+  logic is duplicated here) and returns a `PipelineResult` (output path + any alignment
+  low-confidence warnings, see Alignment below); `jobs.py` runs it in a background thread per
+  upload with an in-memory `Job` (no persistence - job history is lost on server restart,
+  acceptable for the current personal-use-only scope) carrying both a coarse `status` (stage name)
+  and a finer-grained `detail` string; `app.py` is the FastAPI app (`POST /jobs` - takes
+  `language` as one of `languages.LANGUAGES`'s keys, 400 on an unknown code -, `GET /jobs/{id}`
+  - returns `status`/`detail`/`warnings`/`error`/`done` -, `GET /jobs/{id}/video`); `static/
+  index.html` is a single dependency-free HTML/CSS/JS page with a language `<select>`, a real
+  progress bar driven by `detail` (see Detailed progress below), and automatic dark mode via
+  `prefers-color-scheme` (accent color doubles as the dark-mode variant of the karaoke highlight's
+  own gold, `#ffd200`, tying the UI to the rendered video's own palette). Run locally with
   `uvicorn karaoke_he.web.app:app --host 127.0.0.1 --port 8000`, then open
   `http://127.0.0.1:8000`. Uses `separate_audio_remote` (Modal), never the local `separate_audio`.
 - `songs/<slug>/` — small, git-tracked, human-authored inputs per song: `meta.json`
@@ -176,6 +189,63 @@ WhisperX) and correct known weaknesses in it:
    `.ass` track alongside the burned-in video if one is ever wanted; it's normally omitted since
    the highlight is already in the picture. Validated on `or_caze` in VLC: instrumental default,
    vocals present but not selected, Hebrew shown as the track language.
+
+## Multi-language support
+
+`languages.py`'s `LANGUAGES` table is threaded through every stage that needs a language:
+`align_lyrics(..., language=...)` gets the ISO-639-3 code directly (MMS/`ctc-forced-aligner` is
+inherently multilingual - this was mostly a matter of exposing an already-existing parameter, not
+a model change); `mux_video(..., language=...)` gets the BCP 47 tag; `render_overlay_video`/
+`render_line_frame` get the ISO-639-3 code to look up `arabic_shaping`/`is_rtl`. Hebrew's
+`strip_nikud` normalization (`text_utils.normalize_hebrew`) is applied conditionally in
+`web/pipeline.py`, *before* both the line-split and `align_lyrics` so both sides of
+`subtitles.group_words_by_line`'s word-count invariant see the identical text.
+
+`subtitle_render.py`'s font changed from the Hebrew-only `ArialHB.ttc` to
+`/System/Library/Fonts/Supplemental/Arial Unicode.ttf`, which covers Latin + Hebrew + Arabic +
+Cyrillic in one file (confirmed present on this Mac) - no per-language font map needed. Arabic
+additionally needs `arabic_reshaper` before bidi reordering (`_to_display_text`): unlike Hebrew,
+Arabic requires contextual letter-shaping (initial/medial/final joined forms) that neither Pillow
+(no `libraqm`) nor `python-bidi` provides on their own - without it, Arabic text renders as
+disconnected isolated letters.
+
+**A real bug found and fixed while adding non-Hebrew languages**: `render_line_frame`'s
+sung/active/unsung chunk layout was hardcoded to always draw the sung (highlighted) chunk
+rightmost - correct for RTL (Hebrew/Arabic, where reading starts on the right) but backwards for
+LTR languages, where it made the highlight visibly grow right-to-left on text that reads
+left-to-right (confirmed by rendering an English test frame before the fix: "World Hello" with
+"Hello" highlighted on the right, rather than "Hello World" with "Hello" highlighted on the left).
+Fixed via `LanguageConfig.is_rtl`, which flips the chunk draw order; a regression test
+(`test_render_line_frame_puts_sung_chunk_on_the_{left,right}_for_{ltr,rtl}_languages`) locks in
+the correct direction for both cases by checking pixel bounding boxes.
+
+## Detailed progress
+
+`on_progress` callbacks are threaded end-to-end as `(stage, detail)` pairs: `web/pipeline.py`'s
+`run_pipeline()` calls `on_progress(stage, None)` at each of its six coarse stages, and wraps
+three stages' own finer-grained callbacks to report a `detail` string within that stage -
+`align_lyrics`'s 5 named sub-steps ("loading alignment model", "loading vocals audio", "running
+acoustic model", "preparing text", "computing alignment"), `render_overlay_video`'s `"NN%"` (real
+percentage, updated roughly every 1% of frames rendered), and `separate_audio_remote`'s `"NN%"`
+streamed live from the Modal GPU function. `web/jobs.py`'s `Job` carries both fields; `GET
+/jobs/{id}` exposes them; `static/index.html` renders a real progress bar - determinate
+(percentage-driven) for separation/subtitle-rendering, a fixed 5-step increment for alignment's
+named sub-stages, indeterminate/striped for the two stages with no finer signal (lyrics, muxing).
+
+**True Modal-side streaming progress** (not just an elapsed-time approximation) was the
+higher-risk piece of this: `audio_separator`'s `Separator` has no first-class progress callback
+(checked its installed source - only a plain `tqdm` bar around its internal chunk loop), so
+`deploy/modal_app.py`'s `separate_remote` was changed into a Modal **generator function**
+(`.remote_gen(...)` instead of `.remote(...)`): it runs the actual (blocking) `separate_audio`
+call in a background thread, temporarily redirects `sys.stderr` (process-wide, not thread-local -
+acceptable since each container handles one job at a time) through a small wrapper that both
+passes writes through to the real stderr and regex-parses tqdm's rendered `NN%|...` text onto a
+queue, and yields each new percentage from the main (generator) thread as it arrives, finally
+yielding the stems dict once the background thread completes. Requires
+`modal deploy deploy/modal_app.py` after any change to that file (redeployed and validated live
+via `cli/separate.py --remote`: real 0%→100% progress streamed during a real separation run, not
+simulated). Modal's A10G GPU functions require a payment method on file even within the free
+monthly credit - hit and resolved once during this work.
 
 ## Why `legacy/align.py` isn't used as a reference
 

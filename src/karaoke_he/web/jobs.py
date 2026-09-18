@@ -3,6 +3,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from karaoke_he.languages import DEFAULT_LANGUAGE
 from karaoke_he.web.pipeline import run_pipeline
 
 
@@ -10,6 +11,7 @@ from karaoke_he.web.pipeline import run_pipeline
 class Job:
     id: str
     status: str = "queued"
+    detail: str | None = None
     error: str | None = None
     output_path: Path | None = None
     warnings: list[str] = field(default_factory=list)
@@ -26,14 +28,16 @@ def create_job(
     title: str,
     album: str | None = None,
     manual_lyrics: str | None = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> Job:
     job = Job(id=uuid.uuid4().hex[:12])
     with _lock:
         _jobs[job.id] = job
 
-    def _on_progress(stage: str) -> None:
+    def _on_progress(stage: str, detail: str | None = None) -> None:
         with _lock:
             job.status = stage
+            job.detail = detail
 
     def _run() -> None:
         try:
@@ -44,6 +48,7 @@ def create_job(
                 title,
                 album=album,
                 manual_lyrics=manual_lyrics,
+                language=language,
                 on_progress=_on_progress,
             )
             with _lock:

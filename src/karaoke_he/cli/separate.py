@@ -30,7 +30,11 @@ def main(
 
     if remote:
         result = separate_audio_remote(
-            local_input, work_dir / "stems", model_name=model_name, overwrite=overwrite
+            local_input,
+            work_dir / "stems",
+            model_name=model_name,
+            overwrite=overwrite,
+            on_progress=lambda msg: typer.echo(f"progress: {msg}"),
         )
     else:
         result = separate_audio(

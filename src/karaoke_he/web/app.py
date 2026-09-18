@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
+from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.web.jobs import create_job, get_job
 
 app = FastAPI(title="karaoke_he")
@@ -32,13 +33,25 @@ async def create_job_endpoint(
     title: str = Form(...),
     album: str | None = Form(None),
     lyrics: str | None = Form(None),
+    language: str = Form(DEFAULT_LANGUAGE),
 ) -> dict:
+    if language not in LANGUAGES:
+        raise HTTPException(400, f"Unknown language code {language!r}; expected one of {sorted(LANGUAGES)}")
+
     song_slug = f"{_slugify(artist)}_{_slugify(title)}"
     tmp_dir = Path(tempfile.mkdtemp(prefix="karaoke_he_upload_"))
     input_path = tmp_dir / (file.filename or "input.mp3")
     input_path.write_bytes(await file.read())
 
-    job = create_job(song_slug, input_path, artist, title, album=album or None, manual_lyrics=lyrics or None)
+    job = create_job(
+        song_slug,
+        input_path,
+        artist,
+        title,
+        album=album or None,
+        manual_lyrics=lyrics or None,
+        language=language,
+    )
     return {"job_id": job.id}
 
 
@@ -50,6 +63,7 @@ def job_status(job_id: str) -> dict:
     return {
         "id": job.id,
         "status": job.status,
+        "detail": job.detail,
         "error": job.error,
         "done": job.status == "done",
         "warnings": job.warnings,
