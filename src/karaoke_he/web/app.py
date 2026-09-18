@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
-from karaoke_he.lyrics import search_suggestions
+from karaoke_he.lyrics import fetch_from_lrclib, search_suggestions
 from karaoke_he.web.jobs import create_job, get_job
 
 app = FastAPI(title="karaoke_he")
@@ -36,6 +36,21 @@ def suggestions_endpoint(q: str = "") -> list[dict]:
         {"artist": s.artist, "title": s.title, "album": s.album, "duration_sec": s.duration_sec}
         for s in search_suggestions(q)
     ]
+
+
+@app.get("/api/lyrics-check")
+def lyrics_check_endpoint(artist: str, title: str, album: str | None = None) -> dict:
+    """Looks up lyrics on LRCLIB for the given artist/title *without* running a job, so the
+    frontend can confirm lyrics were actually found (and let the user review them) before the
+    "Generate karaoke video" button is enabled - catching a "no lyrics found" failure up front
+    instead of after a multi-minute separation run. Doesn't touch the manual-fallback file (that
+    only makes sense once a song_slug/job exists); a not-found result here is exactly the signal
+    that the user needs to paste lyrics into the manual field instead.
+    """
+    result = fetch_from_lrclib(artist, title, album=album or None)
+    if result is None:
+        return {"found": False}
+    return {"found": True, "source": result.source.value, "synced": result.synced, "text": result.text}
 
 
 @app.post("/jobs")

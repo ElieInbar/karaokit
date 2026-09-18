@@ -164,6 +164,36 @@
 
   button:disabled { opacity: 0.65; cursor: default; }
 
+  button.secondary {
+    width: auto;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    font-size: 0.85rem;
+  }
+
+  .lyrics-check-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+
+  .lyrics-status { font-size: 0.85rem; font-weight: 600; }
+  .lyrics-status.found { color: var(--success-text); }
+  .lyrics-status.not-found { color: var(--error-text); }
+  .lyrics-status.checking { color: var(--text-secondary); font-weight: 400; }
+
+  .lyrics-preview {
+    margin-top: 10px;
+    margin-bottom: 18px;
+    padding: 12px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    max-height: 240px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+
   .spinner {
     width: 14px;
     height: 14px;
@@ -286,12 +316,22 @@
       </div>
     </div>
 
+    <div class="lyrics-check-row">
+      <button type="button" class="secondary" id="check-lyrics-btn">
+        <span class="spinner"></span>
+        <span>Check lyrics</span>
+      </button>
+      <span class="lyrics-status" id="lyrics-status" hidden></span>
+      <button type="button" class="secondary" id="review-lyrics-btn" hidden>Review lyrics</button>
+    </div>
+    <div class="lyrics-preview" id="lyrics-preview" hidden></div>
+
     <div class="field">
       <label for="lyrics">Lyrics <span class="hint">(optional — only needed if the song isn't found on LRCLIB)</span></label>
       <textarea id="lyrics" name="lyrics" rows="6" placeholder="Paste the lyrics here if you get a &quot;lyrics not found&quot; error"></textarea>
     </div>
 
-    <button type="submit">
+    <button type="submit" id="generate-btn" disabled title="Check lyrics (or paste them below) first">
       <span class="spinner"></span>
       <span class="btn-label">Generate karaoke video</span>
     </button>
@@ -418,6 +458,94 @@ function setupAutocomplete(inputId, listId) {
 
 setupAutocomplete("artist", "artist-suggestions");
 setupAutocomplete("title", "title-suggestions");
+
+// --- Lyrics check gate: the "Generate" button stays disabled until lyrics are either found on
+// LRCLIB (confirmed via this check) or pasted manually into the lyrics textarea. ---
+
+const artistInput = document.getElementById("artist");
+const titleInput = document.getElementById("title");
+const albumInput = document.getElementById("album");
+const lyricsTextarea = document.getElementById("lyrics");
+const checkLyricsBtn = document.getElementById("check-lyrics-btn");
+const lyricsStatus = document.getElementById("lyrics-status");
+const reviewLyricsBtn = document.getElementById("review-lyrics-btn");
+const lyricsPreview = document.getElementById("lyrics-preview");
+const generateBtn = document.getElementById("generate-btn");
+
+let lyricsConfirmed = false;
+let lastCheckedText = null;
+
+function updateGenerateButtonState() {
+  const manualLyrics = lyricsTextarea.value.trim().length > 0;
+  generateBtn.disabled = !(lyricsConfirmed || manualLyrics);
+  generateBtn.title = generateBtn.disabled ? "Check lyrics (or paste them below) first" : "";
+}
+
+function resetLyricsCheck() {
+  lyricsConfirmed = false;
+  lastCheckedText = null;
+  lyricsStatus.hidden = true;
+  reviewLyricsBtn.hidden = true;
+  lyricsPreview.hidden = true;
+  updateGenerateButtonState();
+}
+
+[artistInput, titleInput, albumInput].forEach(el => el.addEventListener("input", resetLyricsCheck));
+lyricsTextarea.addEventListener("input", updateGenerateButtonState);
+
+checkLyricsBtn.addEventListener("click", async () => {
+  const artist = artistInput.value.trim();
+  const title = titleInput.value.trim();
+  if (!artist || !title) {
+    lyricsStatus.hidden = false;
+    lyricsStatus.className = "lyrics-status not-found";
+    lyricsStatus.textContent = "Enter an artist and title first.";
+    return;
+  }
+
+  checkLyricsBtn.disabled = true;
+  lyricsStatus.hidden = false;
+  lyricsStatus.className = "lyrics-status checking";
+  lyricsStatus.textContent = "Checking LRCLIB...";
+  reviewLyricsBtn.hidden = true;
+  lyricsPreview.hidden = true;
+
+  try {
+    const params = new URLSearchParams({ artist, title });
+    if (albumInput.value.trim()) params.set("album", albumInput.value.trim());
+    const res = await fetch(`/api/lyrics-check?${params}`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+
+    if (data.found) {
+      lyricsConfirmed = true;
+      lastCheckedText = data.text;
+      lyricsStatus.className = "lyrics-status found";
+      lyricsStatus.textContent = `✓ Lyrics found on LRCLIB${data.synced ? " (synced)" : ""}`;
+      reviewLyricsBtn.hidden = false;
+    } else {
+      lyricsConfirmed = false;
+      lastCheckedText = null;
+      lyricsStatus.className = "lyrics-status not-found";
+      lyricsStatus.textContent = "✗ Not found on LRCLIB — paste the lyrics below to continue.";
+    }
+  } catch (err) {
+    lyricsConfirmed = false;
+    lyricsStatus.className = "lyrics-status not-found";
+    lyricsStatus.textContent = "Lyrics check failed: " + err.message;
+  } finally {
+    checkLyricsBtn.disabled = false;
+    updateGenerateButtonState();
+  }
+});
+
+reviewLyricsBtn.addEventListener("click", () => {
+  if (lastCheckedText === null) return;
+  const showing = !lyricsPreview.hidden;
+  lyricsPreview.hidden = showing;
+  reviewLyricsBtn.textContent = showing ? "Review lyrics" : "Hide lyrics";
+  if (!showing) lyricsPreview.textContent = lastCheckedText;
+});
 
 function progressPercent(stage, detail) {
   if (!detail) return null;
