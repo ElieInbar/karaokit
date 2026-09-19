@@ -4,7 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from karaoke_he.alignment import (
+    WordTimestamp,
     align_lyrics,
+    find_parenthetical_word_indices,
     load_diagnostic_model,
     summarize_low_confidence_regions,
     transcribe_diagnostic_region,
@@ -41,7 +43,17 @@ class PipelineResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def _format_low_confidence_warnings(words, vocals_path: Path) -> list[str]:
+def _region_overlaps_parentheses(region, words: list[WordTimestamp], parenthetical_indices: set[int]) -> bool:
+    """Whether any word in this low-confidence region came from a parenthesized span in the
+    original lyrics text (see `find_parenthetical_word_indices`). Correlated by time rather than
+    index, since `LowConfidenceRegion` only carries a time range, not indices."""
+    return any(
+        region.start <= w.start and w.end <= region.end and i in parenthetical_indices
+        for i, w in enumerate(words)
+    )
+
+
+def _format_low_confidence_warnings(words: list[WordTimestamp], vocals_path: Path, lyrics_text: str) -> list[str]:
     """Turns `alignment.summarize_low_confidence_regions` into user-facing warning strings (in
     French, matching the current frontend locale - see CLAUDE.md for the pending English
     translation of the whole app, not done piecemeal here).
@@ -51,25 +63,47 @@ def _format_low_confidence_warnings(words, vocals_path: Path) -> list[str]:
     account for (a spoken passage, a foreign-language aside, an extra chorus repeat), nearby
     words get shoved to implausible timestamps instead of the pipeline just failing loudly.
 
-    Each *substantial* region (>= `MIN_WORDS_FOR_DIAGNOSIS` words - see that constant) also gets
-    its spoken language auto-detected (`transcribe_diagnostic_region`), since "somewhere around
-    here is off" is much less actionable than "the audio here doesn't sound like the song's
-    declared language". Isolated 1-2 word regions are skipped: tested on a real song, Whisper's
-    language ID on a clip that short is unreliable (wildly different, implausible languages
-    guessed for single-word blips that are more likely just ordinary alignment noise) - only
-    worth trusting, even loosely, once there's a few seconds of real audio to work with. The
-    transcribed text itself is never included in the warning (it may be part of the song's
-    actual, possibly copyrighted content), only the detected language, and even that is presented
-    as a hint rather than a fact, since language ID on sung (not spoken) audio is inherently less
-    reliable than its usual speech use case.
+    A region whose words were parenthesized in the source lyrics (`find_parenthetical_word_
+    indices`) gets a different, more specific message: parentheses commonly mark backing-vocal
+    ad-libs/harmonies, which are often sung *simultaneously* with the main line rather than
+    sequentially in a gap - something forced alignment (which assumes one sequential vocal
+    stream) has no way to represent, so timing there can be off even though the text genuinely
+    was in the lyrics. The generic "content missing from the lyrics" message would be actively
+    wrong in that case, since nothing was actually missing.
+
+    Non-parenthetical, *substantial* regions (>= `MIN_WORDS_FOR_DIAGNOSIS` words - see that
+    constant) also get their spoken language auto-detected (`transcribe_diagnostic_region`),
+    since "somewhere around here is off" is much less actionable than "the audio here doesn't
+    sound like the song's declared language". Isolated 1-2 word regions are skipped: tested on a
+    real song, Whisper's language ID on a clip that short is unreliable (wildly different,
+    implausible languages guessed for single-word blips that are more likely just ordinary
+    alignment noise) - only worth trusting, even loosely, once there's a few seconds of real
+    audio to work with. The transcribed text itself is never included in the warning (it may be
+    part of the song's actual, possibly copyrighted content), only the detected language, and
+    even that is presented as a hint rather than a fact, since language ID on sung (not spoken)
+    audio is inherently less reliable than its usual speech use case.
     """
     regions = summarize_low_confidence_regions(words)
     if not regions:
         return []
 
+    parenthetical_indices = find_parenthetical_word_indices(lyrics_text)
     model = None
     warnings = []
     for region in regions:
+        word_label = f"{region.word_count} mot{'s' if region.word_count != 1 else ''}"
+        time_range = f"{region.start:.0f}s-{region.end:.0f}s"
+
+        if _region_overlaps_parentheses(region, words, parenthetical_indices):
+            warnings.append(
+                f"Timing potentiellement approximatif vers {time_range} ({word_label}) - ce "
+                "passage correspond à du texte entre parenthèses dans les paroles (souvent des "
+                "chœurs/ad-libs), probablement chanté en même temps que la ligne principale : "
+                "l'alignement ne sait représenter qu'une seule voix à la fois, donc le minutage "
+                "ici peut être décalé même si le texte est bien correct."
+            )
+            continue
+
         detail = ""
         if region.word_count >= MIN_WORDS_FOR_DIAGNOSIS:
             model = model or load_diagnostic_model()
@@ -77,9 +111,8 @@ def _format_low_confidence_warnings(words, vocals_path: Path) -> list[str]:
             if text:
                 detail = f" — langue probable (indicatif, peu fiable sur du chant) : {language}"
         warnings.append(
-            f"Timing incertain vers {region.start:.0f}s-{region.end:.0f}s ({region.word_count} mot"
-            f"{'s' if region.word_count != 1 else ''}) - l'audio contient probablement du contenu "
-            f"parlé ou non chanté absent des paroles récupérées{detail}."
+            f"Timing incertain vers {time_range} ({word_label}) - l'audio contient probablement "
+            f"du contenu parlé ou non chanté absent des paroles récupérées{detail}."
         )
     return warnings
 
@@ -186,7 +219,7 @@ def run_pipeline(
     words = try_correct_alignment(
         separation.vocals_path, lyrics_text, words, language=lang_config.iso639_3
     )
-    warnings = _format_low_confidence_warnings(words, separation.vocals_path)
+    warnings = _format_low_confidence_warnings(words, separation.vocals_path, lyrics_text)
 
     on_progress("rendering_subtitles", None)
     background_path = _generate_placeholder_background(

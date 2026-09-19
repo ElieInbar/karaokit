@@ -85,6 +85,32 @@ def load_diagnostic_model(model_name: str = "base"):
     return stable_whisper.load_model(model_name)
 
 
+def find_parenthetical_word_indices(lyrics_text: str) -> set[int]:
+    """Indices, into the same flat word list `align_lyrics` produces (i.e. `lyrics_text.split()`
+    in order), of tokens that were wrapped in parentheses in the original lyrics text - a common
+    convention for backing-vocal ad-libs/harmonies. Used only to make low-confidence-region
+    warnings more specific (see `web/pipeline.py`'s low-confidence warning formatting), not to
+    change alignment itself: forced alignment assumes one sequential vocal stream, so content
+    that's genuinely sung *simultaneously* with the main line (as opposed to sequentially, in a
+    gap - parentheses don't distinguish the two) has no way to be represented and can end up
+    mistimed. Knowing *which* low-confidence words were parenthetical in the source at least lets
+    the warning say "likely overlapping backing vocals" instead of the generic, and in this case
+    actively misleading, "content missing from the lyrics" (the text wasn't missing - it's a
+    timing/overlap issue, not a missing-content one).
+    """
+    tokens = lyrics_text.split()
+    indices: set[int] = set()
+    depth = 0
+    for i, token in enumerate(tokens):
+        if depth > 0:
+            indices.add(i)
+        depth += token.count("(") - token.count(")")
+        depth = max(depth, 0)
+        if "(" in token or ")" in token:
+            indices.add(i)
+    return indices
+
+
 def summarize_low_confidence_regions(
     words: list[WordTimestamp], threshold: float = LOW_CONFIDENCE_SCORE, gap_sec: float = 5.0
 ) -> list[LowConfidenceRegion]:

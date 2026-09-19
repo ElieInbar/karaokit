@@ -1,13 +1,13 @@
 from pathlib import Path
 
 import karaoke_he.web.pipeline as pipeline_module
-from karaoke_he.alignment import LowConfidenceRegion
+from karaoke_he.alignment import LowConfidenceRegion, WordTimestamp
 from karaoke_he.web.pipeline import _format_low_confidence_warnings
 
 
 def test_format_low_confidence_warnings_empty_when_no_regions(monkeypatch):
     monkeypatch.setattr(pipeline_module, "summarize_low_confidence_regions", lambda words: [])
-    assert _format_low_confidence_warnings([], Path("/tmp/vocals.wav")) == []
+    assert _format_low_confidence_warnings([], Path("/tmp/vocals.wav"), "") == []
 
 
 def test_format_low_confidence_warnings_skips_diagnosis_below_threshold(monkeypatch):
@@ -22,7 +22,7 @@ def test_format_low_confidence_warnings_skips_diagnosis_below_threshold(monkeypa
 
     monkeypatch.setattr(pipeline_module, "load_diagnostic_model", _fail_load_model)
 
-    warnings = _format_low_confidence_warnings([], Path("/tmp/vocals.wav"))
+    warnings = _format_low_confidence_warnings([], Path("/tmp/vocals.wav"), "")
     assert len(warnings) == 1
     assert "langue" not in warnings[0]
 
@@ -38,7 +38,7 @@ def test_format_low_confidence_warnings_runs_diagnosis_at_threshold(monkeypatch)
         pipeline_module, "transcribe_diagnostic_region", lambda model, path, start, end: ("fr", "some text")
     )
 
-    warnings = _format_low_confidence_warnings([], Path("/tmp/vocals.wav"))
+    warnings = _format_low_confidence_warnings([], Path("/tmp/vocals.wav"), "")
     assert len(warnings) == 1
     assert "fr" in warnings[0]
     assert "some text" not in warnings[0]
@@ -53,6 +53,40 @@ def test_format_low_confidence_warnings_omits_language_when_transcription_empty(
     monkeypatch.setattr(pipeline_module, "load_diagnostic_model", lambda: "fake-model")
     monkeypatch.setattr(pipeline_module, "transcribe_diagnostic_region", lambda model, path, start, end: ("en", ""))
 
-    warnings = _format_low_confidence_warnings([], Path("/tmp/vocals.wav"))
+    warnings = _format_low_confidence_warnings([], Path("/tmp/vocals.wav"), "")
     assert len(warnings) == 1
     assert "langue" not in warnings[0]
+
+
+def test_format_low_confidence_warnings_uses_parenthetical_message_for_bracketed_words(monkeypatch):
+    words = [
+        WordTimestamp("(ouh,", 10.0, 10.5, score=-6.0),
+        WordTimestamp("nanana)", 10.5, 11.0, score=-6.0),
+    ]
+
+    def _fail_diagnosis(*args, **kwargs):
+        raise AssertionError("should not run language diagnosis on a parenthetical region")
+
+    monkeypatch.setattr(pipeline_module, "load_diagnostic_model", _fail_diagnosis)
+    monkeypatch.setattr(pipeline_module, "transcribe_diagnostic_region", _fail_diagnosis)
+
+    warnings = _format_low_confidence_warnings(words, Path("/tmp/vocals.wav"), "a (ouh, nanana) b")
+
+    assert len(warnings) == 1
+    assert "parenthèses" in warnings[0]
+    assert "chœurs" in warnings[0] or "ad-libs" in warnings[0]
+
+
+def test_format_low_confidence_warnings_uses_generic_message_outside_parentheses(monkeypatch):
+    words = [
+        WordTimestamp("bonjour", 10.0, 10.5, score=-6.0),
+        WordTimestamp("monde", 10.5, 11.0, score=-6.0),
+    ]
+    monkeypatch.setattr(pipeline_module, "load_diagnostic_model", lambda: "fake-model")
+    monkeypatch.setattr(pipeline_module, "transcribe_diagnostic_region", lambda model, path, start, end: ("fr", ""))
+
+    warnings = _format_low_confidence_warnings(words, Path("/tmp/vocals.wav"), "bonjour monde")
+
+    assert len(warnings) == 1
+    assert "parenthèses" not in warnings[0]
+    assert "contenu parlé ou non chanté" in warnings[0]

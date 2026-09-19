@@ -75,6 +75,17 @@ pip install -e .
 `ffmpeg` is available via Homebrew (`/opt/homebrew/bin/ffmpeg`). `mkvmerge` (MKVToolNix) is
 required for the mux stage and must be installed separately: `brew install mkvtoolnix`.
 
+**If this repo's folder is ever moved or renamed**, the venv breaks in two separate ways that
+both need the same fix: (1) `.venv/bin/pip` (and other wrapper scripts) have the *old* absolute
+path hardcoded in their shebang line, so `pip` itself stops running - use
+`.venv/bin/python -m pip ...` instead, which doesn't depend on that shebang; (2) the editable
+install's `.venv/lib/python3.12/site-packages/__editable__.karaoke_he-*.pth` file hardcodes the
+old absolute `src/` path, so `import karaoke_he` fails with `ModuleNotFoundError` even though the
+venv itself still works. Both are fixed by simply re-running `.venv/bin/python -m pip install -e .`
+from the repo's new location - no need to recreate the venv from scratch. (The venv's own
+`python`/`python3.12` symlinks point to the system Python framework install, not into this repo,
+so those keep working regardless of where the repo lives.)
+
 Known dependency quirks on this setup:
 - `audio-separator` needs `audioread` as an extra explicit dependency (not pulled in
   transitively) — already listed in `pyproject.toml`.
@@ -157,6 +168,24 @@ WhisperX) and correct known weaknesses in it:
    itself needs more work before it's a real fix - e.g. crossfading the cut points instead of a
    hard splice, or correcting one region at a time instead of all of them in a single trimmed
    file - not attempted yet.
+
+   A distinct, harder variant of the same underlying limitation: backing-vocal ad-libs/harmonies
+   sung *simultaneously* with the main line (not sequentially, in a gap) can't be represented
+   either, since forced alignment assumes one sequential vocal stream - but here the text isn't
+   missing (it's genuinely in the lyrics), so the generic "content missing from the lyrics"
+   message would be actively wrong. Lyrics conventionally wrap this kind of content in
+   parentheses; `find_parenthetical_word_indices()` detects which word indices (in the same flat
+   list `align_lyrics` produces) came from a parenthesized span in the *original* lyrics text,
+   purely by tracking paren-nesting depth across whitespace-split tokens - no attempt to actually
+   determine whether a given instance is simultaneous or merely sequential (parentheses don't
+   distinguish the two, and treating all of them as "definitely simultaneous" would wrongly
+   degrade the more common sequential case, which forced alignment already handles fine).
+   `web/pipeline.py`'s `_format_low_confidence_warnings()` uses this only to pick a more accurate
+   *message* when a low-confidence region overlaps parenthesized text ("likely overlapping
+   backing vocals, verify by ear" instead of "content missing from the lyrics") - detection/
+   wording only, no attempt at an actual timing fix. A real fix would need a way to tell
+   simultaneous from sequential from the *audio* itself (e.g. polyphony/multi-pitch detection on
+   the isolated vocal stem), which is unexplored - flagged as future work, not attempted.
 4. **Subtitles** (`subtitles.py` + `subtitle_render.py`) — libass has a known, unresolved bug
    ([libass#406](https://github.com/libass/libass/issues/406)) where `\k` karaoke fill always
    progresses left-to-right regardless of BiDi display direction; wrapping text in RLE/PDF

@@ -11,6 +11,7 @@ from karaoke_he.alignment import (
     WordTimestamp,
     _build_trimmed_audio,
     _validate_alignment,
+    find_parenthetical_word_indices,
     low_confidence_words,
     summarize_low_confidence_regions,
     try_correct_alignment,
@@ -206,3 +207,24 @@ def test_try_correct_alignment_rejects_on_alignment_error(tmp_path: Path, monkey
 
     result = try_correct_alignment(tmp_path / "vocals.wav", "text", words, min_words=5)
     assert result == words
+
+
+def test_find_parenthetical_word_indices_flags_single_wrapped_word():
+    assert find_parenthetical_word_indices("a (b) c") == {1}
+
+
+def test_find_parenthetical_word_indices_flags_multi_word_span():
+    assert find_parenthetical_word_indices("a (b c d) e") == {1, 2, 3}
+
+
+def test_find_parenthetical_word_indices_flags_multiple_spans():
+    assert find_parenthetical_word_indices("a (b c) d (e)") == {1, 2, 4}
+
+
+def test_find_parenthetical_word_indices_empty_when_no_parens():
+    assert find_parenthetical_word_indices("a b c") == set()
+
+
+def test_find_parenthetical_word_indices_tolerates_unbalanced_parens():
+    # Shouldn't crash or misbehave badly on malformed input (e.g. a stray closing paren).
+    assert find_parenthetical_word_indices("a) b (c") == {0, 2}
