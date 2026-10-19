@@ -73,12 +73,15 @@ class _ProgressCapture:
 
 @app.function(
     image=image,
-    gpu="A10G",
+    # H100: measured ~3x faster than the original A10G on BS-Roformer (54s vs 162s for a 4-minute
+    # song at the model's default overlap), so roughly the same cost per song at Modal's
+    # per-second billing despite the higher hourly rate.
+    gpu="H100",
     volumes={MODEL_CACHE_DIR: model_cache_volume},
     timeout=600,
 )
 def separate_remote(
-    audio_bytes: bytes, filename: str, model_name: str = DEFAULT_MODEL
+    audio_bytes: bytes, filename: str, model_name: str = DEFAULT_MODEL, overlap: int | None = None
 ) -> Iterator[str | dict[str, bytes]]:
     """A generator function (called via `.remote_gen(...)`) so progress can stream back to the
     caller: yields `"NN%"` strings as separation progresses, then a final `{"vocals.wav": ...,
@@ -102,7 +105,7 @@ def separate_remote(
                 input_path = tmp_dir / filename
                 input_path.write_bytes(audio_bytes)
 
-                result = separate_audio(input_path, tmp_dir / "stems", model_name=model_name)
+                result = separate_audio(input_path, tmp_dir / "stems", model_name=model_name, overlap=overlap)
                 model_cache_volume.commit()
 
                 outcome["stems"] = {

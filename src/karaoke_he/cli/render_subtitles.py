@@ -5,7 +5,7 @@ from pathlib import Path
 import typer
 
 from karaoke_he.alignment import WordTimestamp
-from karaoke_he.subtitle_render import OverlayRenderError, burn_overlay, render_overlay_video
+from karaoke_he.subtitle_render import OverlayRenderError, render_karaoke_video
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -44,12 +44,10 @@ def main(
     duration = _probe_duration(background_video)
 
     subtitles_dir = work_dir / "subtitles"
-    overlay_path = subtitles_dir / "overlay.mov"
     output_path = subtitles_dir / "background_with_subs.mp4"
 
     try:
-        render_overlay_video(lyrics_lines, words, overlay_path, duration=duration, fps=fps)
-        burn_overlay(background_video, overlay_path, output_path)
+        render_karaoke_video(lyrics_lines, words, background_video, output_path, duration=duration, fps=fps)
     except OverlayRenderError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)

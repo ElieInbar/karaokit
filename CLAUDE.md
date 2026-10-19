@@ -129,7 +129,8 @@ WhisperX) and correct known weaknesses in it:
    observed to slow down progressively and die silently on long runs, hence `force_cpu` as a
    fallback). For anything latency-sensitive (the target app needs closer to real-time),
    `separate_audio_remote()` calls the same model via the Modal-deployed GPU function in
-   `deploy/modal_app.py` instead (~2m20s on an A10G) - same `SeparationResult` contract, `modal`
+   `deploy/modal_app.py` instead (~30-40s on an H100 with `REMOTE_OVERLAP = 2`, see Performance
+   below) - same `SeparationResult` contract, `modal`
    imported lazily so it's not a hard dependency of the local-only path. The Modal app must be
    deployed once with `modal deploy deploy/modal_app.py` (redeploy after changing that file);
    `cli/separate.py --remote` then calls the already-deployed function directly via
@@ -397,6 +398,27 @@ yielding the stems dict once the background thread completes. Requires
 via `cli/separate.py --remote`: real 0%→100% progress streamed during a real separation run, not
 simulated). Modal's A10G GPU functions require a payment method on file even within the free
 monthly credit - hit and resolved once during this work.
+
+## Performance (end-to-end time and file sizes)
+
+Measured on a 3:55 song, fresh separation: **432s -> 85s** end to end; the `.mkv` **116 MB -> 18 MB**.
+
+| Step | Before | After | What changed |
+|---|---|---|---|
+| Separation (Modal) | 193s | ~40s | H100 instead of A10G (~3x faster, about the same cost per song at per-second billing), and `separation.REMOTE_OVERLAP = 2` (model default ~4; compute is proportional to it; vocals within 28.5 dB SNR of the default's). Of the 40s, ~10s is container cold start and ~8s is moving WAVs. |
+| Alignment | 17s | ~13-17s | MMS model cached per process (`alignment._cached_alignment_model`, ~3s per job after the first). The rest is the acoustic model on MPS. |
+| Karaoke rendering + burn-in | 215s | ~27s | `subtitle_render.render_karaoke_video`: one ffmpeg pass, only the bottom `BAND_HEIGHT` px rendered, each distinct frame state drawn once (~385 of ~5900 frames). Remaining time is ffmpeg decoding the background + libx264 encoding 1080p, not Python. Apple's hardware encoder was no faster here and made 2x bigger files. |
+| Audio in the `.mkv` | PCM WAV | AAC | `mux.encode_aac`: 192k instrumental, 128k vocals; the browser preview copies the AAC. |
+
+The vinyl background is built during separation and the AAC encodes during rendering
+(`run_pipeline`'s thread pool). Intermediates nobody reads afterwards (`background.mp4`, the old
+`overlay.mov`) are deleted. Benchmarks were run with ad-hoc scripts that wrap each pipeline
+function with a timer; the numbers above are the ones to beat.
+
+Not done yet, in order of expected gain: run the alignment's acoustic model on the Modal GPU
+right after separation (~12s), render the karaoke video in parallel time segments (~10s), keep a
+warm Modal container for a few minutes after a job (~10s cold start, costs idle GPU time),
+return FLAC instead of WAV from Modal (~4s).
 
 ## Why `legacy/align.py` isn't used as a reference
 

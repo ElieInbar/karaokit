@@ -1,3 +1,5 @@
+from PIL import Image
+
 from karaoke_he.alignment import WordTimestamp
 from karaoke_he.subtitles import SubtitleLine
 from karaoke_he.subtitle_render import (
@@ -86,3 +88,33 @@ def test_render_line_frame_puts_sung_chunk_on_the_left_for_ltr_languages():
     sung_min, sung_max = _min_max_x_for_color(frame, HIGHLIGHT_COLOR[:3])
     unsung_min, unsung_max = _min_max_x_for_color(frame, BASE_COLOR[:3])
     assert sung_max < unsung_min  # sung chunk entirely to the left of the unsung chunk
+
+
+def test_render_karaoke_video_burns_lyrics_onto_background_in_one_pass(tmp_path):
+    import subprocess
+
+    from karaoke_he.subtitle_render import render_karaoke_video
+
+    background = tmp_path / "bg.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=0x1d1915:s=1920x1080:r=25", "-t", "2",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(background)],
+        check=True,
+    )
+    words = [WordTimestamp("Hello", 0.2, 0.8, 0.0), WordTimestamp("World", 0.9, 1.6, 0.0)]
+    out = render_karaoke_video(["Hello World"], words, background, tmp_path / "out.mp4", duration=2.0, language="eng")
+
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v", "-count_frames", "-show_entries",
+         "stream=width,height,nb_read_frames", "-of", "csv=p=0", str(out)],
+        capture_output=True, text=True, check=True,
+    )
+    width, height, frames = probe.stdout.strip().split(",")
+    assert (width, height) == ("1920", "1080")
+    assert int(frames) >= 50
+
+    # The lyric line is actually in the picture: the bottom band differs from the plain background.
+    frame = tmp_path / "f.png"
+    subprocess.run(["ffmpeg", "-v", "error", "-ss", "1.0", "-i", str(out), "-frames:v", "1", str(frame)], check=True)
+    band = Image.open(frame).convert("RGB").crop((0, 1080 - 200, 1920, 1080))
+    assert len(set(band.getdata())) > 10

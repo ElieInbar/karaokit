@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 from pymkv import MKVFile, MKVTrack
@@ -9,7 +10,21 @@ DEFAULT_LANGUAGE = "he"
 
 
 class MuxError(RuntimeError):
-    """mkvmerge failed to produce the output file."""
+    """mkvmerge (or the audio encode before it) failed to produce the output file."""
+
+
+def encode_aac(source: Path, output_path: Path, *, bitrate: str = "192k") -> Path:
+    """Compresses a stem for the final video. The stems are uncompressed 16-bit PCM WAV (~10 MB
+    per minute each); muxing them as-is made a 4-minute karaoke .mkv ~116 MB, ~80 MB of it audio.
+    AAC at 192k is transparent for listening and ~13x smaller, and is what both the .mkv and the
+    browser preview .mp4 can carry."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-vn", "-c:a", "aac", "-b:a", bitrate, str(output_path)]
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        raise MuxError(f"ffmpeg failed encoding {source} to AAC (exit code {result.returncode})")
+    return output_path
 
 
 def mux_video(

@@ -117,26 +117,21 @@ def render_line_frame(
 
 
 class OverlayRenderError(RuntimeError):
-    """ffmpeg failed to encode the rendered overlay frames."""
+    """ffmpeg failed while rendering the karaoke video."""
 
 
-def render_overlay_video(
-    lyrics_lines: list[str],
-    words: list[WordTimestamp],
-    output_path: Path,
-    *,
-    duration: float,
-    fps: int = 25,
-    canvas_size: tuple[int, int] = CANVAS_SIZE,
-    language: str = DEFAULT_LANGUAGE,
-    on_progress: Callable[[str], None] = lambda message: None,
-) -> Path:
-    """Renders the whole song's karaoke highlight as a standalone alpha-channel video (ProRes
-    4444), one frame at a time, piped straight into ffmpeg rather than written to disk as a PNG
-    sequence. Meant to be composited onto the background video with ffmpeg's `overlay` filter
-    before muxing - hard-burning it in, since this replaces the .ass soft-subtitle track rather
-    than complementing it.
-    """
+# Lyrics only ever occupy the bottom of the frame (one line, MARGIN_BOTTOM above the bottom
+# edge), so only that band is rendered and composited - about a fifth of the pixels of a full
+# frame. Tall enough for the font's ascenders/descenders plus the outline; even, for yuv420p.
+BAND_HEIGHT = 200
+
+# Measured on a 4-minute song: libx264 "veryfast" at CRF 23 encoded as fast as Apple's hardware
+# encoder (~27s either way - decoding the background and compositing dominate, not encoding)
+# while producing a 2-3x smaller file (9.9 MB vs 21 MB at comparable quality).
+_ENCODER_ARGS = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"]
+
+
+def _line_windows(lyrics_lines: list[str], words: list[WordTimestamp]) -> list[tuple[float, float, SubtitleLine]]:
     windows: list[tuple[float, float, SubtitleLine]] = []
     previous_end = 0.0
     for line in group_words_by_line(lyrics_lines, words):
@@ -144,36 +139,76 @@ def render_overlay_video(
         end = line.words[-1].end
         windows.append((start, end, line))
         previous_end = end
+    return windows
 
+
+def _frame_state(line: SubtitleLine, t: float) -> tuple:
+    """Everything `render_line_frame` depends on at time `t`, so frames with the same state can
+    reuse one rendered image: most frames of a song are identical to the previous one (nothing
+    changes between word boundaries), only the short crossfades actually animate."""
+    sung_count = sum(1 for w in line.words if w.end <= t)
+    active_idx = next((i for i, w in enumerate(line.words) if w.start <= t < w.end), None)
+    fade = None
+    if active_idx is not None:
+        fade = round(min(1.0, max(0.0, (t - line.words[active_idx].start) / TRANSITION_SEC)), 3)
+    return (sung_count, active_idx, fade)
+
+
+def render_karaoke_video(
+    lyrics_lines: list[str],
+    words: list[WordTimestamp],
+    background_video: Path,
+    output_path: Path,
+    *,
+    duration: float,
+    fps: int = 25,
+    language: str = DEFAULT_LANGUAGE,
+    on_progress: Callable[[str], None] = lambda message: None,
+) -> Path:
+    """Renders the karaoke highlight and burns it onto `background_video` in a single ffmpeg pass,
+    producing the final H.264 video track.
+
+    This replaced a two-pass version (every frame rendered at full size into an alpha ProRes
+    file, then a second ffmpeg run to composite and re-encode it) that took ~3.5 minutes for a
+    4-minute song. Now: only the bottom lyrics band is rendered, each distinct frame state is
+    drawn once (`_frame_state`) and its bytes reused for identical frames, frames are piped
+    straight into the compositing ffmpeg (no intermediate file), and the result is
+    encoded with libx264 (see `_ENCODER_ARGS`).
+    """
+    background_video = Path(background_video)
+    if not background_video.is_file():
+        raise FileNotFoundError(f"Background video not found: {background_video}")
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    return _render_karaoke_video(
+        lyrics_lines, words, background_video, output_path, duration, fps, language, on_progress, _ENCODER_ARGS
+    )
+
+
+def _render_karaoke_video(
+    lyrics_lines, words, background_video, output_path, duration, fps, language, on_progress, encoder_args
+) -> Path:
+    windows = _line_windows(lyrics_lines, words)
+    band_size = (CANVAS_SIZE[0], BAND_HEIGHT)
+    band_y = CANVAS_SIZE[1] - BAND_HEIGHT
+
     cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "error",
-        "-f",
-        "rawvideo",
-        "-pixel_format",
-        "rgba",
-        "-video_size",
-        f"{canvas_size[0]}x{canvas_size[1]}",
-        "-framerate",
-        str(fps),
-        "-i",
-        "-",
-        "-c:v",
-        "prores_ks",
-        "-profile:v",
-        "4444",
-        "-pix_fmt",
-        "yuva444p10le",
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", str(background_video),
+        "-f", "rawvideo", "-pixel_format", "rgba",
+        "-video_size", f"{band_size[0]}x{band_size[1]}",
+        "-framerate", str(fps),
+        "-i", "-",
+        "-filter_complex", f"[0:v][1:v]overlay=0:{band_y}:shortest=1:format=auto,format=yuv420p[v]",
+        "-map", "[v]",
+        *encoder_args,
         str(output_path),
     ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
-    blank = Image.new("RGBA", canvas_size, (0, 0, 0, 0)).tobytes()
+    blank = Image.new("RGBA", band_size, (0, 0, 0, 0)).tobytes()
+    cache: dict[tuple, bytes] = {}
     window_idx = 0
     n_frames = int(duration * fps) + 1
     progress_step = max(1, n_frames // 100)
@@ -184,57 +219,27 @@ def render_overlay_video(
                 window_idx += 1
             start, end, line = windows[window_idx] if windows else (0.0, 0.0, None)
             if line is not None and start <= t < end:
-                proc.stdin.write(render_line_frame(line, t, canvas_size, language).tobytes())
+                key = (window_idx, *_frame_state(line, t))
+                frame = cache.get(key)
+                if frame is None:
+                    frame = render_line_frame(line, t, band_size, language).tobytes()
+                    cache[key] = frame
+                    if len(cache) > 64:  # states never repeat once a line is over
+                        cache.pop(next(iter(cache)))
+                proc.stdin.write(frame)
             else:
                 proc.stdin.write(blank)
             if i % progress_step == 0 or i == n_frames - 1:
                 on_progress(f"{round(100 * i / (n_frames - 1)) if n_frames > 1 else 100}%")
+    except BrokenPipeError:
+        pass  # ffmpeg exited early; its return code below says why
     finally:
-        proc.stdin.close()
+        try:
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass
         proc.wait()
 
     if proc.returncode != 0:
         raise OverlayRenderError(f"ffmpeg failed rendering {output_path} (exit code {proc.returncode})")
-
-    return output_path
-
-
-def burn_overlay(background_video: Path, overlay_video: Path, output_path: Path) -> Path:
-    """Composites the rendered overlay (with alpha) onto the background video, hard-burning the
-    karaoke highlight into the video track."""
-    background_video = Path(background_video)
-    overlay_video = Path(overlay_video)
-    if not background_video.is_file():
-        raise FileNotFoundError(f"Background video not found: {background_video}")
-    if not overlay_video.is_file():
-        raise FileNotFoundError(f"Overlay video not found: {overlay_video}")
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "error",
-        "-i",
-        str(background_video),
-        "-i",
-        str(overlay_video),
-        "-filter_complex",
-        "[0:v][1:v]overlay=0:0:format=auto[v]",
-        "-map",
-        "[v]",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-crf",
-        "18",
-        str(output_path),
-    ]
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        raise OverlayRenderError(f"ffmpeg failed compositing {output_path} (exit code {result.returncode})")
-
     return output_path

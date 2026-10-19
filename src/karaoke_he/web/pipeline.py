@@ -1,5 +1,8 @@
 import hashlib
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+
+import soundfile as sf
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,9 +19,9 @@ from karaoke_he.alignment import (
 from karaoke_he.background import render_vinyl_background
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import LyricsNotFoundError, load_manual_fallback, resolve_lyrics
-from karaoke_he.mux import mux_video
+from karaoke_he.mux import encode_aac, mux_video
 from karaoke_he.separation import separate_audio_remote
-from karaoke_he.subtitle_render import burn_overlay, render_overlay_video
+from karaoke_he.subtitle_render import render_karaoke_video
 from karaoke_he.text_utils import normalize_hebrew
 from karaoke_he.web.library import write_job_record
 from karaoke_he.youtube import download_youtube_audio
@@ -151,8 +154,9 @@ def _stems_are_stale(stems_dir: Path, input_hash: str) -> bool:
 
 
 def make_browser_preview(video_path: Path, instrumental_path: Path, output_path: Path) -> Path:
-    """Muxes the (already h264) karaoke video with the instrumental as AAC into a fast-start .mp4
-    that browsers can play inline. The video stream is copied, not re-encoded, so this is quick."""
+    """Muxes the (already h264) karaoke video with the instrumental into a fast-start .mp4 that
+    browsers can play inline. The video stream is copied, not re-encoded, so this is quick; the
+    audio is copied too when it's already AAC (the pipeline's .m4a), else encoded."""
     cmd = [
         "ffmpeg",
         "-y",
@@ -168,10 +172,7 @@ def make_browser_preview(video_path: Path, instrumental_path: Path, output_path:
         "1:a:0",
         "-c:v",
         "copy",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
+        *(["-c:a", "copy"] if Path(instrumental_path).suffix == ".m4a" else ["-c:a", "aac", "-b:a", "192k"]),
         "-shortest",
         "-movflags",
         "+faststart",
@@ -256,6 +257,20 @@ def run_pipeline(
         local_input = work_dir / f"input{Path(input_audio).suffix}"
         local_input.write_bytes(Path(input_audio).read_bytes())
 
+    # Steps that don't depend on what comes before them run alongside it instead of after: the
+    # background only needs the song's duration (known from the input file), so it's built while
+    # the GPU separates; the AAC encodes only need the stems, so they run while the karaoke
+    # video renders.
+    pool = ThreadPoolExecutor(max_workers=3)
+    background_future = pool.submit(
+        render_vinyl_background,
+        sf.info(str(local_input)).duration,
+        work_dir / "mux" / "background.mp4",
+        title=title,
+        artist=artist,
+        language=language,
+    )
+
     on_progress("separating", None)
     stems_dir = work_dir / "stems"
     input_hash = _file_sha256(local_input)
@@ -298,32 +313,38 @@ def run_pipeline(
     warnings = _format_low_confidence_warnings(words, separation.vocals_path, lyrics_text)
 
     on_progress("rendering_subtitles", None)
-    background_path = render_vinyl_background(
-        separation.duration_sec, work_dir / "mux" / "background.mp4", title=title, artist=artist, language=language
+    instrumental_aac_future = pool.submit(
+        encode_aac, separation.instrumental_path, work_dir / "mux" / "instrumental.m4a", bitrate="192k"
     )
-    overlay_path = work_dir / "subtitles" / "overlay.mov"
+    vocals_aac_future = pool.submit(encode_aac, separation.vocals_path, work_dir / "mux" / "vocals.m4a", bitrate="128k")
+    background_path = background_future.result()
     composited_path = work_dir / "subtitles" / "background_with_subs.mp4"
-    render_overlay_video(
+    render_karaoke_video(
         lyrics_lines,
         words,
-        overlay_path,
+        background_path,
+        composited_path,
         duration=separation.duration_sec,
         language=language,
         on_progress=lambda msg: on_progress("rendering_subtitles", msg),
     )
-    burn_overlay(background_path, overlay_path, composited_path)
+    # Intermediates nothing reads afterwards: the background is cheap to regenerate (~2s), and
+    # overlay.mov is a ~350 MB leftover of the old two-pass renderer in older work dirs.
+    background_path.unlink(missing_ok=True)
+    (work_dir / "subtitles" / "overlay.mov").unlink(missing_ok=True)
 
     on_progress("muxing", None)
+    instrumental_aac, vocals_aac = instrumental_aac_future.result(), vocals_aac_future.result()
+    pool.shutdown()
     output_path = mux_video(
         composited_path,
-        separation.instrumental_path,
-        separation.vocals_path,
+        instrumental_aac,
+        vocals_aac,
         work_dir / "mux" / f"{song_slug}_karaoke.mkv",
         language=lang_config.bcp47,
     )
-
     preview_path = make_browser_preview(
-        composited_path, separation.instrumental_path, work_dir / "mux" / f"{song_slug}_preview.mp4"
+        composited_path, instrumental_aac, work_dir / "mux" / f"{song_slug}_preview.mp4"
     )
 
     write_job_record(

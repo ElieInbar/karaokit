@@ -6,6 +6,12 @@ import soundfile as sf
 from audio_separator.separator import Separator
 
 DEFAULT_MODEL = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+
+# Overlapping prediction windows for the remote (web app) separation. Compute time is roughly
+# proportional to it; measured on a 4-minute song on an H100: 54s at the model's default vs 28s
+# at 2, with the separated vocals within 28.5 dB SNR of the default's (a difference judged
+# inaudible for a karaoke instrumental). The local `separate_audio` keeps the model default.
+REMOTE_OVERLAP = 2
 DURATION_TOLERANCE_SEC = 1.0
 
 
@@ -28,8 +34,12 @@ def separate_audio(
     model_name: str = DEFAULT_MODEL,
     overwrite: bool = False,
     force_cpu: bool = False,
+    overlap: int | None = None,
 ) -> SeparationResult:
     """
+    overlap: how many overlapping prediction windows cover each point of the audio (Roformer
+    models); compute time is roughly proportional to it. None keeps the model's own default.
+
     force_cpu: skip the MPS (Apple Silicon GPU) backend and run on CPU instead. MPS was
     observed to silently die mid-inference on this machine (progressively slower chunks,
     then the process vanished with no traceback) - likely a memory-pressure issue with this
@@ -53,7 +63,17 @@ def separate_audio(
 
         torch.backends.mps.is_available = lambda: False
 
-    separator = Separator(output_dir=str(output_dir), output_format="WAV")
+    separator = Separator(
+        output_dir=str(output_dir),
+        output_format="WAV",
+        mdxc_params={
+            "segment_size": 256,
+            "override_model_segment_size": False,
+            "batch_size": None,
+            "overlap": overlap,
+            "pitch_shift": 0,
+        },
+    )
     separator.load_model(model_filename=model_name)
     output_files = separator.separate(str(input_audio))
 
@@ -79,10 +99,11 @@ def separate_audio_remote(
     overwrite: bool = False,
     app_name: str = "karaoke-he-separation",
     function_name: str = "separate_remote",
+    overlap: int | None = REMOTE_OVERLAP,
     on_progress: Callable[[str], None] = lambda message: None,
 ) -> SeparationResult:
     """Same contract as `separate_audio`, but runs on the Modal-deployed GPU function
-    (`deploy/modal_app.py`) instead of locally - ~2 minutes on an A10G vs. ~30 minutes on this
+    (`deploy/modal_app.py`) instead of locally - ~30-40s on an H100 vs. ~30 minutes on this
     machine's MPS. Requires `modal deploy deploy/modal_app.py` to have been run at least once;
     `modal` itself is only needed for this path, so it's imported lazily here rather than being a
     hard dependency of the whole package.
@@ -109,7 +130,7 @@ def separate_audio_remote(
 
     separate_remote_fn = modal.Function.from_name(app_name, function_name)
     stems: dict[str, bytes] | None = None
-    for item in separate_remote_fn.remote_gen(input_audio.read_bytes(), input_audio.name, model_name):
+    for item in separate_remote_fn.remote_gen(input_audio.read_bytes(), input_audio.name, model_name, overlap=overlap):
         if isinstance(item, dict):
             stems = item
         else:

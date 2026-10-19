@@ -1,4 +1,5 @@
 import tempfile
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -239,6 +240,20 @@ def try_correct_alignment(
     return remapped
 
 
+_model_cache: dict[tuple[str, torch.dtype], tuple] = {}
+_model_cache_lock = threading.Lock()
+
+
+def _cached_alignment_model(device: str, dtype: torch.dtype) -> tuple:
+    """The MMS alignment model, loaded once per process: loading it took ~3s of every ~16s
+    alignment, and the web server runs many jobs in one long-lived process."""
+    with _model_cache_lock:
+        key = (device, dtype)
+        if key not in _model_cache:
+            _model_cache[key] = load_alignment_model(device, dtype=dtype)
+        return _model_cache[key]
+
+
 def _validate_alignment(words: list[WordTimestamp], expected_word_count: int) -> None:
     if not words:
         raise AlignmentError("Alignment produced no words.")
@@ -288,7 +303,7 @@ def align_lyrics(
     dtype = torch.float16 if device == "cuda" else torch.float32
 
     on_progress("loading alignment model")
-    model, tokenizer = load_alignment_model(device, dtype=dtype)
+    model, tokenizer = _cached_alignment_model(device, dtype)
 
     on_progress("loading vocals audio")
     audio_waveform = load_audio(str(vocals_path), model.dtype, model.device)

@@ -46,3 +46,14 @@ def test_mux_video_raises_on_missing_subtitles_when_provided(tmp_path: Path):
     existing.write_bytes(b"")
     with pytest.raises(FileNotFoundError, match="subtitles"):
         mux_video(existing, existing, existing, tmp_path / "out.mkv", subtitles_path=tmp_path / "missing.ass")
+
+
+def test_encode_aac_compresses_a_wav(tmp_path: Path):
+    import subprocess
+
+    from karaoke_he.mux import encode_aac
+
+    wav = tmp_path / "stem.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=5", "-ac", "2", str(wav)], check=True)
+    out = encode_aac(wav, tmp_path / "stem.m4a")
+    assert out.stat().st_size < wav.stat().st_size / 5
