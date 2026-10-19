@@ -212,15 +212,16 @@ def search_songs(query: str, *, limit: int = 8, timeout: float = 6.0) -> list[So
         if cached and time.monotonic() - cached[0] < _SEARCH_CACHE_TTL_SEC:
             return list(cached[1])
 
-    response = _lrclib_get("/search", {"q": query}, timeout, retry_delays=LRCLIB_INTERACTIVE_RETRY_DELAYS_SEC)
-    response.raise_for_status()
+    candidates = _lrclib_search(query, timeout)
+    if _HEBREW_RE.search(query) and len(candidates) < 3:
+        candidates += _hebrew_spelling_fallback(query, timeout)
 
     def rank(candidate: dict) -> int:
         return 2 if candidate.get("syncedLyrics") else 1 if candidate.get("plainLyrics") else 0
 
     best: dict[tuple[str, str], dict] = {}
     order: list[tuple[str, str]] = []
-    for candidate in response.json():
+    for candidate in candidates:
         artist, title = candidate.get("artistName"), candidate.get("trackName")
         if not artist or not title or candidate.get("instrumental") or candidate.get("id") is None:
             continue
@@ -251,6 +252,52 @@ def search_songs(query: str, *, limit: int = 8, timeout: float = 6.0) -> list[So
             _search_cache.pop(next(iter(_search_cache)))
         _search_cache[cache_key] = (time.monotonic(), list(matches))
     return matches
+
+
+def _lrclib_search(query: str, timeout: float) -> list[dict]:
+    response = _lrclib_get("/search", {"q": query}, timeout, retry_delays=LRCLIB_INTERACTIVE_RETRY_DELAYS_SEC)
+    response.raise_for_status()
+    return response.json()
+
+
+_HEBREW_RE = re.compile(r"[\u0590-\u05FF]")
+_HEBREW_FINALS = str.maketrans("ךםןףץ", "כמנפצ")
+_NIKUD_RE = re.compile(r"[\u0591-\u05C7]")
+
+
+def _hebrew_skeleton(text: str) -> str:
+    """Hebrew spelling varies between full and defective forms - the same word can be written
+    with or without an extra י or ו (e.g. "שירד" / "שיירד") - and LRCLIB matches letters
+    exactly. Dropping nikud, those two letters and final-letter forms makes the variants equal."""
+    text = _NIKUD_RE.sub("", text).translate(_HEBREW_FINALS)
+    return "".join(c for c in text if c not in "וי")
+
+
+# Share of the query's words a fallback result must contain. Not all of them: the artist is often
+# stored in Latin letters ("Osher Cohen") while the user typed it in Hebrew ("אושר כהן").
+_FALLBACK_MIN_WORD_SHARE = 0.6
+
+
+def _hebrew_spelling_fallback(query: str, timeout: float) -> list[dict]:
+    """When a Hebrew query finds (almost) nothing, search its two longest Hebrew words one at a
+    time - a word spelled the way LRCLIB stores it still matches on its own - and keep the songs
+    whose artist + title contain most of the query's words once spelling variants are ignored,
+    best matches first. Best effort: a failed probe (LRCLIB is often busy) is just skipped."""
+    words = [w for w in query.split() if _HEBREW_RE.search(w) and len(_hebrew_skeleton(w)) >= 2]
+    probes = sorted(words, key=lambda w: len(_hebrew_skeleton(w)), reverse=True)[:2]
+    wanted = [_hebrew_skeleton(_fold(w)) for w in query.split()]
+    scored: dict[int, tuple[float, dict]] = {}
+    for probe in probes:
+        try:
+            candidates = _lrclib_search(probe, timeout)
+        except requests.exceptions.RequestException:
+            continue
+        for candidate in candidates:
+            haystack = _hebrew_skeleton(_fold(f"{candidate.get('artistName', '')} {candidate.get('trackName', '')}"))
+            share = sum(1 for w in wanted if w and w in haystack) / max(1, len(wanted))
+            if share >= _FALLBACK_MIN_WORD_SHARE and candidate.get("id") is not None:
+                scored[candidate["id"]] = (share, candidate)
+    return [c for _, c in sorted(scored.values(), key=lambda pair: pair[0], reverse=True)]
 
 
 def fetch_lrclib_by_id(lrclib_id: int, *, timeout: float = 10.0) -> LyricsResult | None:

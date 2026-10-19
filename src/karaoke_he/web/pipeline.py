@@ -16,14 +16,13 @@ from karaoke_he.alignment import (
     load_diagnostic_model,
     summarize_low_confidence_regions,
     transcribe_diagnostic_region,
-    try_correct_alignment,
 )
 from karaoke_he.background import render_vinyl_background
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import LyricsNotFoundError, fetch_lrclib_by_id, load_manual_fallback, resolve_lyrics
 from karaoke_he.mux import encode_aac, mux_video
 from karaoke_he import config
-from karaoke_he.separation import ALIGNMENT_EMISSIONS_NAME, separate_audio, separate_audio_remote
+from karaoke_he.separation import ALIGNMENT_EMISSIONS_NAME, APP_OVERLAP, separate_audio, separate_audio_remote
 from karaoke_he.subtitle_render import render_karaoke_video
 from karaoke_he.text_utils import normalize_hebrew
 from karaoke_he.web.library import write_job_record
@@ -312,12 +311,18 @@ def run_pipeline(
             on_progress=lambda msg: on_progress("separating", msg),
         )
     else:
-        # No account needed, but slow (~20-30 min for a 4-minute song on a laptop) and with no
-        # progress to report; the alignment's acoustic model then also runs locally (below).
+        # No account needed, but slow (~10-15 min for a 4-minute song on a laptop, with the same
+        # overlap as on Modal); progress and cancellation work through audio-separator's tqdm
+        # output. The alignment's acoustic model then also runs locally (below).
         if stale:
-            on_progress("separating", "running on this computer - this can take 20-30 minutes")
             (stems_dir / ALIGNMENT_EMISSIONS_NAME).unlink(missing_ok=True)
-        separation = separate_audio(local_input, stems_dir, overwrite=stale)
+        separation = separate_audio(
+            local_input,
+            stems_dir,
+            overwrite=stale,
+            overlap=APP_OVERLAP,
+            on_progress=lambda msg: on_progress("separating", msg),
+        )
     (stems_dir / STEMS_SOURCE_STAMP).write_text(input_hash)
 
     on_progress("lyrics", None)
@@ -351,9 +356,9 @@ def run_pipeline(
         emissions=emissions,
         on_progress=lambda msg: on_progress("aligning", msg),
     )
-    words = try_correct_alignment(
-        separation.vocals_path, lyrics_text, words, language=lang_config.iso639_3
-    )
+    # alignment.try_correct_alignment (splice out low-confidence regions and re-align) isn't run:
+    # it never produced a better result in testing (its safety net always fell back to the
+    # original) and cost a whole extra local alignment pass. Kept in alignment.py for experiments.
     warnings = _format_low_confidence_warnings(words, separation.vocals_path, lyrics_text)
 
     on_progress("rendering_subtitles", None)

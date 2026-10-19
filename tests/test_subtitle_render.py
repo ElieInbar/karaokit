@@ -132,3 +132,23 @@ def test_fonts_use_the_basic_layout_engine_so_bidi_is_applied_once():
 
     assert get_font(40).layout_engine == ImageFont.Layout.BASIC
     assert get_font(40, arabic=True).layout_engine == ImageFont.Layout.BASIC
+
+
+def test_render_karaoke_video_scales_a_background_of_another_size(tmp_path):
+    import subprocess
+
+    from karaoke_he.subtitle_render import render_karaoke_video
+
+    background = tmp_path / "bg1080.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=0x1d1915:s=1920x1080:r=25", "-t", "2",
+         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(background)],
+        check=True,
+    )
+    words = [WordTimestamp("Hello", 0.2, 0.8, 0.0), WordTimestamp("World", 0.9, 1.6, 0.0)]
+    out = render_karaoke_video(["Hello World"], words, background, tmp_path / "out.mp4", duration=2.0, language="eng")
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(out)],
+        capture_output=True, text=True, check=True,
+    )
+    assert tuple(int(v) for v in probe.stdout.strip().split(",")) == CANVAS_SIZE

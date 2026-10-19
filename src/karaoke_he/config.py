@@ -4,7 +4,7 @@ Everything that differs between installations lives here, so the same code runs 
 author's Mac, in Docker, or on someone else's machine with their own accounts:
 
 - KARAOKIT_SEPARATION: "modal" (GPU on the user's own Modal account - fast), "local" (this
-  machine, no account needed - ~20-30 min per song on a laptop), or "auto" (default: Modal when
+  machine, no account needed - ~10-15 min per song on a laptop), or "auto" (default: Modal when
   Modal credentials are configured, else local).
 - KARAOKIT_MODAL_APP: name of the deployed Modal app (`modal deploy deploy/modal_app.py`).
 - KARAOKIT_ENABLE_YOUTUBE: "1" to allow importing audio from YouTube links. Off by default:

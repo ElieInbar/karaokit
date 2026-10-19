@@ -198,10 +198,30 @@ def render_karaoke_video(
     )
 
 
+def _video_size(path: Path) -> tuple[int, int] | None:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    try:
+        width, height = result.stdout.strip().split(",")[:2]
+        return int(width), int(height)
+    except ValueError:
+        return None
+
+
 def _render_karaoke_video(
     lyrics_lines, words, background_video, output_path, duration, fps, language, on_progress, encoder_args
 ) -> Path:
     windows = _line_windows(lyrics_lines, words)
+    # The lyrics band is laid out for CANVAS_SIZE; any other background (e.g. a 1080p video given
+    # to the CLI) is scaled to it first, or the band would land in the wrong place.
+    background_filter = (
+        "[0:v]null[bg]"
+        if _video_size(background_video) == CANVAS_SIZE
+        else f"[0:v]scale={CANVAS_SIZE[0]}:{CANVAS_SIZE[1]},setsar=1[bg]"
+    )
     band_size = (CANVAS_SIZE[0], BAND_HEIGHT)
     band_y = CANVAS_SIZE[1] - BAND_HEIGHT
 
@@ -216,7 +236,7 @@ def _render_karaoke_video(
         # (big) background in its native format; letting ffmpeg pick (format=auto, then
         # converting) measured ~4.5s slower on a 4-minute song for the same output.
         "-filter_complex",
-        f"[1:v]format=yuva420p[band];[0:v][band]overlay=0:{band_y}:shortest=1:format=yuv420[v]",
+        f"{background_filter};[1:v]format=yuva420p[band];[bg][band]overlay=0:{band_y}:shortest=1:format=yuv420[v]",
         "-map", "[v]",
         *encoder_args,
         str(output_path),

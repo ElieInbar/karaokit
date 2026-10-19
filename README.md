@@ -45,7 +45,7 @@ docker compose up --build
 Then open <http://127.0.0.1:8000>.
 
 Out of the box this runs in **local mode**: no account needed, but separating the vocals takes
-about 20-30 minutes per song on a typical computer. For songs in under a minute, set up Modal.
+about 10-15 minutes per song on a typical computer. For songs in under a minute, set up Modal.
 
 ## Fast mode: your own Modal account
 

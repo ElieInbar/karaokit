@@ -439,8 +439,9 @@ named sub-stages, indeterminate/striped for the two stages with no finer signal 
 **True Modal-side streaming progress** (not just an elapsed-time approximation) was the
 higher-risk piece of this: `audio_separator`'s `Separator` has no first-class progress callback
 (checked its installed source - only a plain `tqdm` bar around its internal chunk loop), so
-`deploy/modal_app.py`'s `separate_remote` was changed into a Modal **generator function**
-(`.remote_gen(...)` instead of `.remote(...)`): it runs the actual (blocking) `separate_audio`
+`deploy/modal_app.py`'s function was first a Modal **generator function**
+(`.remote_gen(...)` instead of `.remote(...)`) - superseded since by `separate_job`, see "Cancellation"
+below - that ran the actual (blocking) `separate_audio`
 call in a background thread, temporarily redirects `sys.stderr` (process-wide, not thread-local -
 acceptable since each container handles one job at a time) through a small wrapper that both
 passes writes through to the real stderr and regex-parses tqdm's rendered `NN%|...` text onto a
@@ -459,7 +460,7 @@ cold**; the `.mkv` **116 MB -> 15 MB**. Output is **720p** since this round (see
 | Step | Before | After | What changed |
 |---|---|---|---|
 | Separation (Modal) | 193s | ~28s warm / ~48s cold | H100 instead of A10G (~3x faster, about the same cost per song at per-second billing), and `separation.REMOTE_OVERLAP = 2` (model default ~4; compute is proportional to it; vocals within 28.5 dB SNR of the default's). Cold start is ~20s. |
-| Alignment | 17s | ~1s | The acoustic model (the only expensive part) runs on the Modal GPU right after separation (`separate_remote(..., with_alignment_emissions=True)`); its output (`alignment.AcousticEmissions`, ~1 MB) is saved as `stems/alignment_emissions.npz` and `align_lyrics(..., emissions=...)` does the text-dependent rest locally in milliseconds - verified to give identical word timings. Stems cached from before this get their emissions computed locally once (MMS model cached per process) and saved. |
+| Alignment | 17s | ~1s | The acoustic model (the only expensive part) runs on the Modal GPU right after separation (`separate_job(..., with_alignment_emissions=True)`); its output (`alignment.AcousticEmissions`, ~1 MB) is saved as `stems/alignment_emissions.npz` and `align_lyrics(..., emissions=...)` does the text-dependent rest locally in milliseconds - verified to give identical word timings. Stems cached from before this get their emissions computed locally once (MMS model cached per process) and saved. |
 | Karaoke rendering + burn-in | 215s | ~14-17s (720p; ~25-30s at 1080p) | `subtitle_render.render_karaoke_video`: one ffmpeg pass, only the bottom `BAND_HEIGHT` px rendered, each distinct frame state drawn once (~385 of ~5900 frames, 0.6s of Python), band converted to yuva420p before overlaying (~4.5s faster than `format=auto`). What's left is ffmpeg encoding + overlay, which scale with pixel count - hence 720p. |
 | Audio in the `.mkv` | PCM WAV | AAC | `mux.encode_aac`: 192k instrumental, 128k vocals; the browser preview copies the AAC. |
 
@@ -482,6 +483,28 @@ layout at any resolution - setting `CANVAS_SIZE` back to `(1920, 1080)` alone re
 Remaining levers: keep the Modal container warm for a few minutes after a job (`scaledown_window`
 - removes the ~20s cold start, but bills idle H100 time); return FLAC instead of WAV from Modal
 (~4s).
+
+## Audit fixes (cancellation, local mode, alignment, Hebrew search)
+
+- **Cancellation really stops the GPU.** Cancelling a Modal *generator* call (`remote_gen`) isn't
+  possible server-side - an audit showed the separation and alignment kept running after a
+  job was cancelled. `deploy/modal_app.py`'s `separate_job` is now a plain function, *spawned*
+  by `separation.separate_audio_remote`, which reads progress from a temporary `modal.Queue`
+  and, on any interruption (a job's `JobCancelled`), calls `FunctionCall.cancel(
+  terminate_containers=True)`. Verified in Modal's logs ("Successfully canceled input" at 3%).
+- **tqdm progress capture is shared** (`separation.capture_tqdm_progress`): used inside the Modal
+  container and by local mode, where `separate_audio(..., on_progress=...)` now reports "NN%"
+  and is cancellable (the exception raised by `on_progress` propagates out of tqdm's write,
+  verified). Local mode also uses `APP_OVERLAP = 2` (was the model default): about half the time.
+- **`try_correct_alignment` is no longer run** by the pipeline (it never improved a result and
+  cost an extra local alignment pass); the per-region language diagnosis still runs.
+- **Backgrounds of another size are scaled** to `CANVAS_SIZE` before the lyrics band is
+  overlaid (the CLI could be given a 1080p video after the switch to 720p).
+- **Hebrew spelling-tolerant search** (`lyrics._hebrew_spelling_fallback`): a Hebrew query with
+  fewer than 3 results also searches its two longest words alone and keeps songs containing at
+  least 60% of the query's words once nikud, י/ו and final letters are ignored
+  (`_hebrew_skeleton`) - e.g. "עד שירד הסהר" finds "עד שיירד הסהר". 60%, not 100%, because
+  artists are often stored in Latin letters while typed in Hebrew. Failed probes are skipped.
 
 ## Why `legacy/align.py` isn't used as a reference
 

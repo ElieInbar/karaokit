@@ -1,4 +1,7 @@
-from collections.abc import Callable
+import re
+import sys
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,11 +10,55 @@ from audio_separator.separator import Separator
 
 DEFAULT_MODEL = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
 
-# Overlapping prediction windows for the remote (web app) separation. Compute time is roughly
+# Overlapping prediction windows used by the web app (remote and local). Compute time is roughly
 # proportional to it; measured on a 4-minute song on an H100: 54s at the model's default vs 28s
 # at 2, with the separated vocals within 28.5 dB SNR of the default's (a difference judged
-# inaudible for a karaoke instrumental). The local `separate_audio` keeps the model default.
-REMOTE_OVERLAP = 2
+# inaudible for a karaoke instrumental). `separate_audio` itself still defaults to the model's.
+APP_OVERLAP = 2
+REMOTE_OVERLAP = APP_OVERLAP  # kept for older imports
+
+# audio-separator has no progress callback (only a plain tqdm bar around its chunk loop), so
+# progress is read back out of tqdm's rendered text.
+_TQDM_PERCENT_RE = re.compile(r"(\d{1,3})%\|")
+
+
+class _TqdmProgressCapture:
+    """A stderr stand-in that passes everything through to the real stderr (logs unaffected)
+    and calls `on_percent` with each new tqdm percentage. An exception raised by `on_percent`
+    (e.g. a job's cancellation) propagates out of tqdm's write - i.e. out of the separation
+    loop itself, which is how a running separation gets stopped."""
+
+    def __init__(self, real_stream, on_percent: Callable[[int], None]) -> None:
+        self._real = real_stream
+        self._on_percent = on_percent
+        self._last_pct: int | None = None
+
+    def write(self, text: str) -> int:
+        self._real.write(text)
+        match = _TQDM_PERCENT_RE.search(text)
+        if match:
+            pct = int(match.group(1))
+            if pct != self._last_pct:
+                self._last_pct = pct
+                self._on_percent(pct)
+        return len(text)
+
+    def flush(self) -> None:
+        self._real.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+@contextmanager
+def capture_tqdm_progress(on_percent: Callable[[int], None]) -> Iterator[None]:
+    """Redirects `sys.stderr` (process-wide, not per thread) to report tqdm percentages."""
+    real = sys.stderr
+    sys.stderr = _TqdmProgressCapture(real, on_percent)
+    try:
+        yield
+    finally:
+        sys.stderr = real
 
 # Written next to the stems when the remote separation also computed the alignment's acoustic
 # model output (`alignment.AcousticEmissions`); it belongs to these exact stems.
@@ -39,8 +86,12 @@ def separate_audio(
     overwrite: bool = False,
     force_cpu: bool = False,
     overlap: int | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> SeparationResult:
     """
+    on_progress: called with "NN%" as separation advances (read from audio-separator's tqdm
+    output); an exception it raises aborts the separation.
+
     overlap: how many overlapping prediction windows cover each point of the audio (Roformer
     models); compute time is roughly proportional to it. None keeps the model's own default.
 
@@ -79,7 +130,11 @@ def separate_audio(
         },
     )
     separator.load_model(model_filename=model_name)
-    output_files = separator.separate(str(input_audio))
+    if on_progress is None:
+        output_files = separator.separate(str(input_audio))
+    else:
+        with capture_tqdm_progress(lambda pct: on_progress(f"{pct}%")):
+            output_files = separator.separate(str(input_audio))
 
     vocals_out = _find_stem(output_files, "vocals")
     instrumental_out = _find_stem(output_files, "instrumental")
@@ -102,21 +157,19 @@ def separate_audio_remote(
     model_name: str = DEFAULT_MODEL,
     overwrite: bool = False,
     app_name: str = "karaoke-he-separation",
-    function_name: str = "separate_remote",
-    overlap: int | None = REMOTE_OVERLAP,
+    function_name: str = "separate_job",
+    overlap: int | None = APP_OVERLAP,
     with_alignment_emissions: bool = False,
     on_progress: Callable[[str], None] = lambda message: None,
 ) -> SeparationResult:
     """Same contract as `separate_audio`, but runs on the Modal-deployed GPU function
-    (`deploy/modal_app.py`) instead of locally - ~30-40s on an H100 vs. ~30 minutes on this
-    machine's MPS. Requires `modal deploy deploy/modal_app.py` to have been run at least once;
-    `modal` itself is only needed for this path, so it's imported lazily here rather than being a
-    hard dependency of the whole package.
+    (`deploy/modal_app.py`) - ~30-40s on an H100 vs. ~20-30 minutes on a laptop. Requires
+    `modal deploy deploy/modal_app.py` to have been run once in the user's Modal account.
 
-    `separate_remote` is a Modal *generator* function: it yields `"NN%"` progress strings (parsed
-    server-side from audio-separator's own tqdm output, since it has no first-class progress
-    callback) as separation runs, then a final `{"vocals.wav": ..., "instrumental.wav": ...}`
-    dict. `on_progress` is called with each progress string as it arrives.
+    The function is *spawned* (not streamed) so it can be cancelled: if `on_progress` raises
+    (a job's cancellation) or anything else interrupts the wait, the remote call is cancelled
+    and its container terminated, instead of the GPU running on to completion for nothing.
+    Progress ("NN%") comes back through a temporary Modal queue the function writes to.
     """
     input_audio = Path(input_audio)
     output_dir = Path(output_dir)
@@ -131,25 +184,43 @@ def separate_audio_remote(
     if not overwrite and vocals_path.exists() and instrumental_path.exists():
         return SeparationResult(vocals_path, instrumental_path, model_name, source_duration)
 
+    import queue
+
     import modal
+    import modal.exception
 
-    separate_remote_fn = modal.Function.from_name(app_name, function_name)
-    stems: dict[str, bytes] | None = None
-    stale_emissions = output_dir / ALIGNMENT_EMISSIONS_NAME
-    stale_emissions.unlink(missing_ok=True)  # about to be replaced (or not produced) along with the stems
-    for item in separate_remote_fn.remote_gen(
-        input_audio.read_bytes(),
-        input_audio.name,
-        model_name,
-        overlap=overlap,
-        with_alignment_emissions=with_alignment_emissions,
-    ):
-        if isinstance(item, dict):
-            stems = item
-        else:
-            on_progress(str(item))
+    separate_fn = modal.Function.from_name(app_name, function_name)
+    (output_dir / ALIGNMENT_EMISSIONS_NAME).unlink(missing_ok=True)  # replaced (or not) with the stems
 
-    if stems is None:
+    with modal.Queue.ephemeral() as progress_queue:
+        call = separate_fn.spawn(
+            input_audio.read_bytes(),
+            input_audio.name,
+            model_name,
+            overlap=overlap,
+            with_alignment_emissions=with_alignment_emissions,
+            progress_queue=progress_queue,
+        )
+        try:
+            while True:
+                try:
+                    stems = call.get(timeout=0)
+                    break
+                except (TimeoutError, modal.exception.TimeoutError):
+                    pass
+                try:
+                    for message in progress_queue.get_many(100, block=True, timeout=1.0):
+                        on_progress(str(message))
+                except queue.Empty:
+                    pass
+        except BaseException:
+            try:
+                call.cancel(terminate_containers=True)
+            except Exception:  # noqa: BLE001 - best effort; the original error matters more
+                pass
+            raise
+
+    if not stems or "vocals.wav" not in stems:
         raise SeparationError("Modal separation function ended without producing stems.")
 
     vocals_path.write_bytes(stems["vocals.wav"])

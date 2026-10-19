@@ -218,3 +218,34 @@ def test_fetch_lrclib_by_id_uses_the_exact_record(monkeypatch):
     assert fetch_lrclib_by_id(42).text == "exact lyrics"
     assert fetch_lrclib_by_id(7) is None
     assert seen[0].endswith("/api/get/42")
+
+
+def test_hebrew_skeleton_ignores_spelling_variants():
+    from karaoke_he.lyrics import _hebrew_skeleton
+
+    assert _hebrew_skeleton("שירד") == _hebrew_skeleton("שיירד")
+    assert _hebrew_skeleton("שָׁלוֹם") == _hebrew_skeleton("שלם")
+    assert _hebrew_skeleton("לך") == _hebrew_skeleton("לכ")
+
+
+def test_hebrew_search_falls_back_to_single_words_when_spelling_differs(monkeypatch):
+    lyrics_module._search_cache.clear()
+    song = {"id": 9, "artistName": "Osher Cohen", "trackName": "עד שיירד הסהר", "plainLyrics": "x"}
+    other = {"id": 10, "artistName": "Someone", "trackName": "הסהר הכחול", "plainLyrics": "y"}
+    queries = []
+
+    def fake_get(url, params=None, timeout=None, **kwargs):
+        queries.append(params["q"])
+        if params["q"] == "הסהר":
+            return _FakeResponse(200, [other, song])
+        if params["q"] == "שירד":
+            return _FakeResponse(503, {})  # a busy probe is skipped, not fatal
+        return _FakeResponse(200, [])  # the full query, with the "wrong" spelling
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    monkeypatch.setattr(lyrics_module, "LRCLIB_INTERACTIVE_RETRY_DELAYS_SEC", ())
+
+    results = search_songs("אושר כהן עד שירד הסהר")
+
+    assert [r.lrclib_id for r in results] == [9]  # "הסהר הכחול" shares too few words
+    assert queries[0] == "אושר כהן עד שירד הסהר"
