@@ -97,7 +97,7 @@ def test_render_karaoke_video_burns_lyrics_onto_background_in_one_pass(tmp_path)
 
     background = tmp_path / "bg.mp4"
     subprocess.run(
-        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=0x1d1915:s=1920x1080:r=25", "-t", "2",
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"color=c=0x1d1915:s={CANVAS_SIZE[0]}x{CANVAS_SIZE[1]}:r=25", "-t", "2",
          "-c:v", "libx264", "-pix_fmt", "yuv420p", str(background)],
         check=True,
     )
@@ -110,11 +110,14 @@ def test_render_karaoke_video_burns_lyrics_onto_background_in_one_pass(tmp_path)
         capture_output=True, text=True, check=True,
     )
     width, height, frames = probe.stdout.strip().split(",")
-    assert (width, height) == ("1920", "1080")
+    assert (int(width), int(height)) == CANVAS_SIZE
     assert int(frames) >= 50
 
     # The lyric line is actually in the picture: the bottom band differs from the plain background.
     frame = tmp_path / "f.png"
     subprocess.run(["ffmpeg", "-v", "error", "-ss", "1.0", "-i", str(out), "-frames:v", "1", str(frame)], check=True)
-    band = Image.open(frame).convert("RGB").crop((0, 1080 - 200, 1920, 1080))
+    from karaoke_he.subtitle_render import BAND_HEIGHT
+
+    w, h = CANVAS_SIZE
+    band = Image.open(frame).convert("RGB").crop((0, h - BAND_HEIGHT, w, h))
     assert len(set(band.getdata())) > 10

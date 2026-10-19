@@ -14,14 +14,26 @@ from karaoke_he.text_utils import strip_display_punctuation
 # Covers Latin + Hebrew + Arabic + Cyrillic (and more) in one file, so every currently supported
 # language renders correctly without a per-language font map.
 FONT_PATH = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
-FONT_SIZE = 65  # matches the .ass Style's Fontsize on a 1920x1080 canvas
-CANVAS_SIZE = (1920, 1080)
-MARGIN_BOTTOM = 90
+# Output resolution. 720p rather than 1080p: rendering + encoding time scales with pixel count,
+# and at 1080p it was the biggest remaining share of a job (~28s of ~60s for a 4-minute song).
+# Every size below was designed on a 1080-line canvas and is scaled from there with `scaled()`,
+# so the layout looks the same at any resolution - change CANVAS_SIZE alone to go back up.
+CANVAS_SIZE = (1280, 720)
+DESIGN_HEIGHT = 1080
+
+
+def scaled(px_at_1080: float) -> int:
+    """A length designed for a 1080-line frame, at the current CANVAS_SIZE."""
+    return round(px_at_1080 * CANVAS_SIZE[1] / DESIGN_HEIGHT)
+
+
+FONT_SIZE = scaled(65)  # matches the .ass Style's Fontsize on a 1920x1080 canvas
+MARGIN_BOTTOM = scaled(90)
 
 BASE_COLOR = (255, 255, 255, 255)
 HIGHLIGHT_COLOR = (255, 210, 0, 255)
 OUTLINE_COLOR = (0, 0, 0, 255)
-OUTLINE_WIDTH = 3
+OUTLINE_WIDTH = max(2, scaled(3))
 
 # How long a word takes to glow from base to highlight color once it starts being sung. A hard
 # instant color swap (the .ass version) read as cheap/jarring in motion even though each static
@@ -123,7 +135,7 @@ class OverlayRenderError(RuntimeError):
 # Lyrics only ever occupy the bottom of the frame (one line, MARGIN_BOTTOM above the bottom
 # edge), so only that band is rendered and composited - about a fifth of the pixels of a full
 # frame. Tall enough for the font's ascenders/descenders plus the outline; even, for yuv420p.
-BAND_HEIGHT = 200
+BAND_HEIGHT = scaled(200) // 2 * 2
 
 # Measured on a 4-minute song: libx264 "veryfast" at CRF 23 encoded as fast as Apple's hardware
 # encoder (~27s either way - decoding the background and compositing dominate, not encoding)

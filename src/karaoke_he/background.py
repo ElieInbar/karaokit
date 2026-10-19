@@ -16,7 +16,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from karaoke_he.languages import DEFAULT_LANGUAGE
-from karaoke_he.subtitle_render import CANVAS_SIZE, FONT_PATH, _to_display_text
+from karaoke_he.subtitle_render import CANVAS_SIZE, FONT_PATH, _to_display_text, scaled
 
 BG_COLOR = (29, 25, 21)  # web app's dark "paper"
 TITLE_COLOR = (243, 236, 224)
@@ -26,18 +26,18 @@ GROOVE_LIGHT = (46, 40, 34)
 LABEL_RED = (226, 73, 47)
 LABEL_RED_DARK = (201, 59, 35)
 
-RECORD_DIAMETER = 1190
-RECORD_X = CANVAS_SIZE[0] - RECORD_DIAMETER + 270  # partly off the right edge
-RECORD_Y = -330  # and off the top, clear of the lyric lines at the bottom
+RECORD_DIAMETER = scaled(1190)
+RECORD_X = CANVAS_SIZE[0] - RECORD_DIAMETER + scaled(270)  # partly off the right edge
+RECORD_Y = -scaled(330)  # and off the top, clear of the lyric lines at the bottom
 SECONDS_PER_TURN = 8.0
 FPS = 25
 
-TEXT_LEFT = 115
-TITLE_TOP = 150
-TITLE_MAX_WIDTH = 820  # stays clear of the record
-TITLE_MAX_SIZE = 120
-TITLE_MIN_SIZE = 60
-ARTIST_SIZE = 46
+TEXT_LEFT = scaled(115)
+TITLE_TOP = scaled(150)
+TITLE_MAX_WIDTH = scaled(820)  # stays clear of the record
+TITLE_MAX_SIZE = scaled(120)
+TITLE_MIN_SIZE = scaled(60)
+ARTIST_SIZE = scaled(46)
 
 
 class BackgroundError(RuntimeError):
@@ -47,7 +47,7 @@ class BackgroundError(RuntimeError):
 def _fit_font(text: str, max_width: int) -> tuple[ImageFont.FreeTypeFont, str]:
     """Largest title font that fits `max_width`; below the minimum size, the text is truncated
     with an ellipsis instead of shrinking further."""
-    for size in range(TITLE_MAX_SIZE, TITLE_MIN_SIZE - 1, -4):
+    for size in range(TITLE_MAX_SIZE, TITLE_MIN_SIZE - 1, -2):
         font = ImageFont.truetype(FONT_PATH, size)
         if font.getlength(text) <= max_width:
             return font, text
@@ -68,7 +68,7 @@ def _draw_scene(title: str, artist: str | None, language: str) -> Image.Image:
         artist_text = artist.strip().upper()
         while artist_text and artist_font.getlength(artist_text) > TITLE_MAX_WIDTH:
             artist_text = artist_text[:-1]
-        y = TITLE_TOP + title_font.size + 40
+        y = TITLE_TOP + title_font.size + scaled(40)
         draw.text((TEXT_LEFT, y), _to_display_text(artist_text, language), font=artist_font, fill=ARTIST_COLOR)
     return scene
 
@@ -80,7 +80,7 @@ def _draw_record() -> Image.Image:
     record = Image.new("RGBA", (d, d), (0, 0, 0, 0))
     draw = ImageDraw.Draw(record)
     c = d / 2
-    groove_step = 7
+    groove_step = max(4, scaled(7))
     for i, r in enumerate(range(int(c), int(d * 0.17), -groove_step)):
         color = GROOVE_LIGHT if i % 2 else GROOVE_DARK
         draw.ellipse((c - r, c - r, c + r, c + r), fill=color)
@@ -88,13 +88,13 @@ def _draw_record() -> Image.Image:
     label_r = d * 0.17
     draw.ellipse((c - label_r, c - label_r, c + label_r, c + label_r), fill=LABEL_RED)
     ring = label_r * 0.92
-    draw.ellipse((c - ring, c - ring, c + ring, c + ring), outline=LABEL_RED_DARK, width=6)
+    draw.ellipse((c - ring, c - ring, c + ring, c + ring), outline=LABEL_RED_DARK, width=scaled(6))
     # Off-center "printed" marks on the label.
     for angle, length in ((-40, 0.55), (-20, 0.35)):
         a = math.radians(angle)
         x0, y0 = c + math.cos(a) * label_r * 0.35, c + math.sin(a) * label_r * 0.35
         x1, y1 = c + math.cos(a) * label_r * (0.35 + length), c + math.sin(a) * label_r * (0.35 + length)
-        draw.line((x0, y0, x1, y1), fill=TITLE_COLOR, width=12)
+        draw.line((x0, y0, x1, y1), fill=TITLE_COLOR, width=scaled(12))
     hole = d * 0.012
     draw.ellipse((c - hole, c - hole, c + hole, c + hole), fill=BG_COLOR)
     return record

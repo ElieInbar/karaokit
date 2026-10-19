@@ -32,5 +32,5 @@ def test_render_vinyl_background_matches_requested_duration(tmp_path):
         capture_output=True, text=True, check=True,
     )
     lines = probe.stdout.split()
-    assert lines[0] == "1920,1080"
+    assert lines[0] == f"{CANVAS_SIZE[0]},{CANVAS_SIZE[1]}"
     assert abs(float(lines[1]) - 3.5) < 0.2
