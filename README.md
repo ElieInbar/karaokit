@@ -4,6 +4,16 @@ Turn any song into a karaoke video: the vocals are removed, the lyrics are timed
 and each word lights up as it's sung. Works with Hebrew, Arabic (right-to-left), English,
 French, Spanish and Russian.
 
+![Karaokit demo: upload a song, add its lyrics, generate, and watch the words light up](docs/demo/karaokit-demo.gif)
+
+▶ [Watch the resulting karaoke video with sound](docs/demo/karaoke-one-cute-leash.mp4) (36 s)
+
+<sub>Demo song: "One Cute Leash" by [Geoff Peters](https://ccmixter.org/people/geoffpeters)
+([ccmixter.org/files/geoffpeters/58766](https://ccmixter.org/files/geoffpeters/58766)),
+licensed [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). Modified by Karaokit:
+vocals removed, lyrics added as an on-screen karaoke highlight. The 54 s of processing are
+sped up in the animation.</sub>
+
 You run Karaokit on your own computer and open it in your browser. You give it a song, either
 by uploading an audio file or, if you turn the option on, from a YouTube link. You pick the song
 in the search box so its lyrics are found, and you get back:

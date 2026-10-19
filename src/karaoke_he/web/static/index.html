@@ -1031,6 +1031,8 @@ async function runSearch(query, { open = true } = {}) {
     const data = await res.json();
     searchResults = data.results || [];
     activeResult = -1;
+    // A slow answer (LRCLIB can take seconds) mustn't pop up over whatever the user moved on to.
+    if (document.activeElement !== songSearch) open = false;
     if (data.error) {
       if (open) showNote(`${escapeHtml(data.error)} <button type="button" class="secondary" data-retry>Retry</button>`);
     } else if (open) {
