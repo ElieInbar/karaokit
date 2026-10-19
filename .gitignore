@@ -9,3 +9,6 @@ __pycache__/
 .DS_Store
 songs_examples/
 .env
+
+# Lyrics written by the app (pasted/edited in the form) - copyrighted, never commit them.
+songs/*/lyrics.txt

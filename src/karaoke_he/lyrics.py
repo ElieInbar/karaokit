@@ -20,7 +20,7 @@ def _user_agent() -> str:
         app_version = version("karaokit")
     except Exception:  # noqa: BLE001 - running from a source tree that isn't installed
         app_version = "dev"
-    homepage = os.environ.get("KARAOKIT_HOMEPAGE", "https://github.com/Elieinbar/karaokit")
+    homepage = os.environ.get("KARAOKIT_HOMEPAGE", "https://github.com/ElieInbar/karaokit")
     return f"Karaokit/{app_version} (+{homepage})"
 
 

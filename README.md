@@ -26,7 +26,7 @@ in the search box so its lyrics are found, and you get back:
 You need [Docker](https://docs.docker.com/get-docker/).
 
 ```bash
-git clone https://github.com/Elieinbar/karaokit.git
+git clone https://github.com/ElieInbar/karaokit.git
 cd karaokit
 cp .env.example .env
 docker compose up --build
