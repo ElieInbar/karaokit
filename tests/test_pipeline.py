@@ -125,3 +125,33 @@ def test_stems_are_stale_unless_stamped_with_the_same_input(tmp_path):
     (tmp_path / pipeline_module.STEMS_SOURCE_STAMP).write_text("abc")
     assert not pipeline_module._stems_are_stale(tmp_path, "abc")
     assert pipeline_module._stems_are_stale(tmp_path, "def")  # different audio, same song name
+
+
+def test_saved_alignment_emissions_are_reused_instead_of_recomputed(monkeypatch, tmp_path):
+    import numpy as np
+
+    from karaoke_he.alignment import AcousticEmissions
+
+    saved = AcousticEmissions(emissions=np.random.rand(10, 32).astype(np.float32), stride=20.0)
+    path = tmp_path / "alignment_emissions.npz"
+    saved.save(path)
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("emissions should have been loaded from the saved file")
+
+    monkeypatch.setattr(pipeline_module, "compute_emissions", _fail)
+    loaded = pipeline_module._load_or_compute_emissions(path, tmp_path / "vocals.wav", on_progress=lambda m: None)
+    assert loaded.stride == 20.0
+    assert np.array_equal(loaded.emissions, saved.emissions)
+
+
+def test_missing_alignment_emissions_are_computed_and_saved(monkeypatch, tmp_path):
+    import numpy as np
+
+    from karaoke_he.alignment import AcousticEmissions
+
+    computed = AcousticEmissions(emissions=np.zeros((4, 32), dtype=np.float32), stride=20.0)
+    monkeypatch.setattr(pipeline_module, "compute_emissions", lambda *a, **k: computed)
+    path = tmp_path / "alignment_emissions.npz"
+    assert pipeline_module._load_or_compute_emissions(path, tmp_path / "v.wav", on_progress=lambda m: None) is computed
+    assert path.is_file()
