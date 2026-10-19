@@ -415,6 +415,10 @@
     100% { transform: translateX(250%); }
   }
 
+  .status-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+  .status-footer:has(#cancel-btn[hidden]):has(#status-meta:empty) { display: none; }
+  .status-meta { font-size: 0.82rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+
   video { width: 100%; border-radius: 10px; margin-top: 14px; display: block; background: #000; }
 
   a.download {
@@ -587,9 +591,13 @@
     </button>
   </form>
 
-  <div id="status">
+  <div id="status" aria-live="polite">
     <div class="stage-label"></div>
     <div class="progress-track"><div class="progress-fill" style="width: 0%"></div></div>
+    <div class="status-footer">
+      <span class="status-meta" id="status-meta"></span>
+      <button type="button" class="secondary" id="cancel-btn" hidden>Cancel</button>
+    </div>
     <div class="result"></div>
   </div>
 
@@ -624,13 +632,13 @@ function setBusy(btn, busy) {
 }
 
 const STAGE_LABELS = {
-  queued: "Queued...",
-  downloading: "Downloading audio from YouTube...",
-  separating: "Separating vocals from instrumental (GPU)...",
-  lyrics: "Fetching lyrics...",
-  aligning: "Aligning lyrics to vocals...",
-  rendering_subtitles: "Rendering karaoke highlight...",
-  muxing: "Assembling final video...",
+  queued: "Starting…",
+  downloading: "Downloading audio from YouTube",
+  separating: "Separating vocals from instrumental",
+  lyrics: "Preparing lyrics",
+  aligning: "Aligning lyrics to vocals",
+  rendering_subtitles: "Rendering the karaoke highlight",
+  muxing: "Assembling the final video",
   done: "Done!",
   error: "Error",
 };
@@ -971,6 +979,38 @@ function progressPercent(stage, detail) {
   return null;
 }
 
+// --- Overall progress: one bar for the whole job, weighted by how long each stage typically
+// takes (measured on real runs: separation and rendering dominate), plus a rough time estimate. ---
+
+const STAGE_WEIGHTS = {
+  downloading: 3,
+  separating: 40,
+  lyrics: 2,
+  aligning: 10,
+  rendering_subtitles: 37,
+  muxing: 8,
+};
+
+function stagesFor(fromYoutube) {
+  return Object.keys(STAGE_WEIGHTS).filter(s => fromYoutube || s !== "downloading");
+}
+
+// Fraction (0-1) of the whole job done, counting the current stage's own percentage when known.
+function overallFraction(stages, stage, detail) {
+  const idx = stages.indexOf(stage);
+  if (idx < 0) return 0;
+  const total = stages.reduce((sum, s) => sum + STAGE_WEIGHTS[s], 0);
+  const before = stages.slice(0, idx).reduce((sum, s) => sum + STAGE_WEIGHTS[s], 0);
+  const within = (progressPercent(stage, detail) ?? 0) / 100;
+  return (before + STAGE_WEIGHTS[stage] * within) / total;
+}
+
+function formatRemaining(seconds) {
+  if (seconds < 60) return "less than a minute left";
+  const minutes = Math.round(seconds / 60);
+  return `about ${minutes} min left`;
+}
+
 const form = document.getElementById("job-form");
 const button = generateBtn;
 const statusDiv = document.getElementById("status");
@@ -978,32 +1018,125 @@ const stageLabelDiv = statusDiv.querySelector(".stage-label");
 const progressTrack = statusDiv.querySelector(".progress-track");
 const progressFill = statusDiv.querySelector(".progress-fill");
 const resultDiv = statusDiv.querySelector(".result");
+const statusMeta = document.getElementById("status-meta");
+const cancelBtn = document.getElementById("cancel-btn");
 let pollTimer = null;
+let activeJob = null; // { id, fromYoutube }
 
-function setProgress(stage, detail) {
-  const pct = progressPercent(stage, detail);
-  const label = STAGE_LABELS[stage] || stage;
-  stageLabelDiv.textContent = detail && pct === null ? `${label} — ${detail}` : label;
-  if (pct === null) {
-    progressTrack.classList.add("indeterminate");
-    progressFill.style.width = "40%";
-  } else {
-    progressTrack.classList.remove("indeterminate");
-    progressFill.style.width = `${pct}%`;
+// The running job survives a page reload: its id is kept in localStorage (a per-browser
+// convenience only - the server's in-memory job list is the real state).
+const ACTIVE_JOB_KEY = "karaokit.activeJob";
+function rememberJob(job) {
+  try { job ? localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(job)) : localStorage.removeItem(ACTIVE_JOB_KEY); } catch {}
+}
+function recalledJob() {
+  try { return JSON.parse(localStorage.getItem(ACTIVE_JOB_KEY)); } catch { return null; }
+}
+
+function showRunning(job) {
+  const stages = stagesFor(activeJob.fromYoutube);
+  const fraction = overallFraction(stages, job.status, job.detail);
+  const idx = stages.indexOf(job.status);
+  const stagePct = progressPercent(job.status, job.detail);
+  const label = STAGE_LABELS[job.status] || job.status;
+  stageLabelDiv.textContent = idx >= 0
+    ? `Step ${idx + 1} of ${stages.length} — ${label}${stagePct !== null ? ` · ${stagePct}%` : "…"}`
+    : label;
+  progressTrack.classList.toggle("indeterminate", idx < 0);
+  progressFill.style.width = `${Math.round(fraction * 100)}%`;
+
+  // Only estimate once there's enough signal: early on, one slow step skews everything.
+  const elapsed = job.elapsed_sec || 0;
+  statusMeta.textContent = fraction > 0.08 && elapsed > 15
+    ? `${Math.round(fraction * 100)}% · ${formatRemaining(elapsed * (1 - fraction) / fraction)}`
+    : `${Math.round(fraction * 100)}%`;
+}
+
+function showFinished(jobId, job) {
+  clearInterval(pollTimer);
+  rememberJob(null);
+  activeJob = null;
+  cancelBtn.hidden = true;
+  statusMeta.textContent = "";
+  progressTrack.style.display = "none";
+  setBusy(button, false);
+  updateGenerateButtonState();
+
+  if (job.status === "cancelled") {
+    statusDiv.className = "";
+    stageLabelDiv.textContent = "Cancelled.";
+    return;
   }
+  if (job.status === "error") {
+    statusDiv.className = "error";
+    let message = escapeHtml(job.error);
+    if (job.error && job.error.includes("No lyrics found")) {
+      message += "<br><br>Paste the lyrics into the \"Your lyrics\" field above and try again — " +
+        "the separation step already ran, so it'll be reused and this will be faster.";
+    }
+    stageLabelDiv.innerHTML = message;
+    return;
+  }
+  statusDiv.className = "done";
+  stageLabelDiv.textContent = STAGE_LABELS.done;
+  let html = `<a class="download" href="/jobs/${jobId}/video" download>Download video (.mkv)</a>`;
+  if (job.has_preview) html += `<video controls preload="metadata" src="/jobs/${jobId}/preview"></video>`;
+  if (job.warnings && job.warnings.length) {
+    html += `<div class="warnings">${job.warnings.length} passage${job.warnings.length === 1 ? "" : "s"} to double-check:` +
+      `<ul>${job.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div>`;
+  }
+  resultDiv.innerHTML = html;
+  loadLibrary();
+}
+
+function watchJob(jobId) {
+  clearInterval(pollTimer);
+  statusDiv.style.display = "block";
+  statusDiv.className = "";
+  resultDiv.innerHTML = "";
+  progressTrack.style.display = "";
+  cancelBtn.hidden = false;
+  cancelBtn.disabled = false;
+  cancelBtn.textContent = "Cancel";
+  setBusy(button, true);
+
+  const tick = async () => {
+    let job;
+    try {
+      const res = await fetch(`/jobs/${jobId}`);
+      if (res.status === 404) {
+        // The server restarted (jobs live in memory) - nothing left to watch.
+        showFinished(jobId, { status: "error", error: "This job is no longer known to the server (it was probably restarted)." });
+        return;
+      }
+      job = await res.json();
+    } catch {
+      return; // transient network blip - try again on the next tick
+    }
+    if (job.done || job.status === "error" || job.status === "cancelled") {
+      showFinished(jobId, job);
+    } else {
+      showRunning(job);
+    }
+  };
+  tick();
+  pollTimer = setInterval(tick, 2000);
 }
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   clearInterval(pollTimer);
   const formData = new FormData(form);
+  const fromYoutube = document.getElementById("source-youtube").checked;
   setBusy(button, true);
-  progressTrack.style.display = "";
 
   statusDiv.style.display = "block";
   statusDiv.className = "";
   resultDiv.innerHTML = "";
-  setProgress("queued", null);
+  progressTrack.style.display = "";
+  progressTrack.classList.add("indeterminate");
+  stageLabelDiv.textContent = fromYoutube ? STAGE_LABELS.queued : "Uploading…";
+  statusMeta.textContent = "";
 
   let jobId;
   try {
@@ -1018,43 +1151,23 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
-  pollTimer = setInterval(async () => {
-    const res = await fetch(`/jobs/${jobId}`);
-    const job = await res.json();
+  activeJob = { id: jobId, fromYoutube };
+  rememberJob(activeJob);
+  watchJob(jobId);
+});
 
-    if (job.status === "error") {
-      clearInterval(pollTimer);
-      statusDiv.className = "error";
-      progressTrack.style.display = "none";
-      let message = escapeHtml(job.error);
-      if (job.error && job.error.includes("No lyrics found")) {
-        message += "<br><br>Paste the lyrics into the \"Lyrics\" field above and try again — " +
-          "the separation step already ran, so it'll be reused and this will be faster.";
-      }
-      stageLabelDiv.innerHTML = message;
-      setBusy(button, false);
-      return;
-    }
-
-    if (job.done) {
-      clearInterval(pollTimer);
-      statusDiv.className = "done";
-      progressTrack.style.display = "none";
-      stageLabelDiv.textContent = STAGE_LABELS.done;
-      let html = `<a class="download" href="/jobs/${jobId}/video" download>Download video (.mkv)</a>`;
-      if (job.has_preview) html += `<video controls preload="metadata" src="/jobs/${jobId}/preview"></video>`;
-      if (job.warnings && job.warnings.length) {
-        html += `<div class="warnings">${job.warnings.length} passage${job.warnings.length === 1 ? "" : "s"} to double-check:` +
-          `<ul>${job.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div>`;
-      }
-      resultDiv.innerHTML = html;
-      loadLibrary();
-      setBusy(button, false);
-      return;
-    }
-
-    setProgress(job.status, job.detail);
-  }, 2000);
+cancelBtn.addEventListener("click", async () => {
+  if (!activeJob) return;
+  cancelBtn.disabled = true;
+  cancelBtn.textContent = "Cancelling…";
+  try {
+    const res = await fetch(`/jobs/${activeJob.id}/cancel`, { method: "POST" });
+    if (!res.ok && res.status !== 409) throw new Error(await errorMessage(res));
+  } catch (err) {
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = "Cancel";
+    statusMeta.textContent = "Couldn't cancel: " + err.message;
+  }
 });
 
 // --- "Your videos": every finished video under work/, newest first ---
@@ -1121,6 +1234,14 @@ libraryList.addEventListener("click", (e) => {
 });
 
 loadLibrary();
+
+// Pick a running job back up after a reload.
+(async () => {
+  const saved = recalledJob();
+  if (!saved || !saved.id) return;
+  activeJob = saved;
+  watchJob(saved.id);
+})();
 </script>
 </body>
 </html>

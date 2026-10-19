@@ -329,6 +329,18 @@ the pipeline (LRCLIB may not have the song at all).
   what the job will use. Text the page auto-filled (from LRCLIB or a video description) is
   cleared again if the artist/title changes, so one song's lyrics can't leak into another job;
   text the user typed is never auto-cleared.
+- **Overall progress, time estimate, cancel, resume**: the page shows one bar for the whole job
+  ("Step N of M"), each stage weighted by its typical share of total time (`STAGE_WEIGHTS` in
+  `static/index.html` - separation and rendering dominate), with a rough "about N min left" once
+  past ~8%. `POST /jobs/{id}/cancel` sets the job's `cancel_requested` event; the job's own
+  progress callback raises `JobCancelled` at its next update (every few seconds in download,
+  separation and rendering), and any exception seen after a cancel request is reported as
+  `cancelled`, since e.g. yt-dlp rewraps exceptions raised from its hooks. The running job's id is
+  kept in `localStorage`, so reloading the page resumes watching it.
+- **"Your videos" library** (`web/library.py`, `GET /api/library`, `/library/{slug}/video|preview`):
+  lists every `work/<slug>/mux/*_karaoke.mkv`, newest first. Names come from the
+  `work/<slug>/job.json` each web job writes, else `songs/<slug>/meta.json`, else the slug.
+  Previews for older videos are built on first request. Slugs from URLs are confined to `work/`.
 - **One running job per song**: `POST /jobs` answers 409 while another job for the same slug is
   still running, since both would write into the same `work/<slug>/`.
 - **User-facing errors**: `web/jobs.py`'s `user_facing_error` turns exceptions into readable

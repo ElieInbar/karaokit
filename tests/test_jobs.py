@@ -41,3 +41,55 @@ def test_second_job_for_the_same_song_is_rejected_while_the_first_runs(monkeypat
         create_job("same_song", None, "A", "B", youtube_url="https://youtu.be/x")
     create_job("other_song", None, "C", "D", youtube_url="https://youtu.be/y")
     release.set()
+
+
+def _wait_until(predicate, timeout=5.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_cancel_stops_the_job_at_its_next_progress_update(monkeypatch):
+    def _long_pipeline(*args, on_progress, **kwargs):
+        for i in range(1000):
+            on_progress("rendering_subtitles", f"{i % 100}%")
+            threading.Event().wait(0.01)
+        raise AssertionError("pipeline should have been cancelled")
+
+    monkeypatch.setattr(jobs_module, "run_pipeline", _long_pipeline)
+    monkeypatch.setattr(jobs_module, "_jobs", {})
+
+    job = create_job("song", None, "A", "B", youtube_url="https://youtu.be/x")
+    assert _wait_until(lambda: job.status == "rendering_subtitles")
+    assert jobs_module.cancel_job(job.id) is True
+    assert _wait_until(lambda: job.status == "cancelled")
+    assert job.error is None
+    assert jobs_module.cancel_job(job.id) is False  # already finished
+    assert jobs_module.cancel_job("unknown") is None
+
+    # A cancelled job no longer blocks a new one for the same song.
+    monkeypatch.setattr(jobs_module, "run_pipeline", lambda *a, **k: (_ for _ in ()).throw(PipelineError("x")))
+    create_job("song", None, "A", "B", youtube_url="https://youtu.be/x")
+
+
+def test_cancel_wins_over_whatever_error_it_surfaced_as(monkeypatch):
+    def _pipeline(*args, on_progress, **kwargs):
+        try:
+            while True:
+                on_progress("downloading", "5%")
+                threading.Event().wait(0.01)
+        except jobs_module.JobCancelled as exc:
+            raise YouTubeError("download aborted") from exc  # like yt-dlp rewrapping it
+
+    monkeypatch.setattr(jobs_module, "run_pipeline", _pipeline)
+    monkeypatch.setattr(jobs_module, "_jobs", {})
+
+    job = create_job("song2", None, "A", "B", youtube_url="https://youtu.be/x")
+    assert _wait_until(lambda: job.status == "downloading")
+    jobs_module.cancel_job(job.id)
+    assert _wait_until(lambda: job.status == "cancelled")

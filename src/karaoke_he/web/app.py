@@ -11,7 +11,7 @@ from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import fetch_from_lrclib, search_suggestions
 from karaoke_he.web.library import find_entry_video, list_library, resolve_song_dir
 from karaoke_he.web.pipeline import PROJECT_ROOT, make_browser_preview
-from karaoke_he.web.jobs import JobConflictError, create_job, get_job
+from karaoke_he.web.jobs import JobConflictError, cancel_job, create_job, get_job
 from karaoke_he.youtube import (
     YouTubeError,
     extract_lyrics_from_description,
@@ -186,8 +186,19 @@ def job_status(job_id: str) -> dict:
         "error": job.error,
         "done": job.status == "done",
         "has_preview": job.preview_path is not None,
+        "elapsed_sec": round(job.elapsed_sec),
         "warnings": job.warnings,
     }
+
+
+@app.post("/jobs/{job_id}/cancel")
+def cancel_job_endpoint(job_id: str) -> dict:
+    result = cancel_job(job_id)
+    if result is None:
+        raise HTTPException(404, "Job not found")
+    if result is False:
+        raise HTTPException(409, "This job has already finished")
+    return {"cancelling": True}
 
 
 @app.get("/jobs/{job_id}/preview")

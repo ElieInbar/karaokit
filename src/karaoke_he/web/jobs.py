@@ -1,5 +1,6 @@
 import shutil
 import threading
+import time
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -12,7 +13,14 @@ from karaoke_he.languages import DEFAULT_LANGUAGE
 from karaoke_he.web.pipeline import PipelineError, run_pipeline
 from karaoke_he.youtube import YouTubeError, friendly_youtube_error
 
-FINISHED_STATUSES = {"done", "error"}
+FINISHED_STATUSES = {"done", "error", "cancelled"}
+
+
+class JobCancelled(Exception):
+    """Raised from a job's own progress callback once cancellation is requested - progress
+    callbacks fire every few seconds in every long stage (download, separation, rendering), so
+    that's where a running pipeline can actually stop. Deliberately not a RuntimeError, so no
+    stage's error handling swallows it by accident."""
 
 
 class JobConflictError(RuntimeError):
@@ -42,6 +50,12 @@ class Job:
     output_path: Path | None = None
     preview_path: Path | None = None
     warnings: list[str] = field(default_factory=list)
+    started_at: float = field(default_factory=time.monotonic)
+    cancel_requested: threading.Event = field(default_factory=threading.Event)
+
+    @property
+    def elapsed_sec(self) -> float:
+        return time.monotonic() - self.started_at
 
 
 _jobs: dict[str, Job] = {}
@@ -65,6 +79,8 @@ def create_job(
         _jobs[job.id] = job
 
     def _on_progress(stage: str, detail: str | None = None) -> None:
+        if job.cancel_requested.is_set():
+            raise JobCancelled()
         with _lock:
             job.status = stage
             job.detail = detail
@@ -88,6 +104,12 @@ def create_job(
                 job.preview_path = result.preview_path
                 job.warnings = result.warnings
         except Exception as exc:  # noqa: BLE001 - surfaced to the caller via job.error, not raised
+            if job.cancel_requested.is_set():
+                # Whatever the cancellation surfaced as (yt-dlp, for one, rewraps exceptions
+                # raised from its progress hook as its own download errors), it was a cancel.
+                with _lock:
+                    job.status = "cancelled"
+                return
             traceback.print_exc()
             with _lock:
                 job.error = user_facing_error(exc, job.status)
@@ -105,3 +127,16 @@ def create_job(
 def get_job(job_id: str) -> Job | None:
     with _lock:
         return _jobs.get(job_id)
+
+
+def cancel_job(job_id: str) -> bool | None:
+    """Requests cancellation; the job stops at its next progress update. Returns None for an
+    unknown job, False if it had already finished."""
+    with _lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return None
+        if job.status in FINISHED_STATUSES:
+            return False
+        job.cancel_requested.set()
+        return True

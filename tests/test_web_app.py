@@ -240,3 +240,12 @@ def test_create_job_returns_409_while_the_same_song_is_generating(monkeypatch):
     res = client.post("/jobs", data={"artist": "A", "title": "B", "youtube_url": "https://youtu.be/abc123"})
     assert res.status_code == 409
     assert "already being generated" in res.json()["detail"]
+
+
+def test_cancel_endpoint_maps_unknown_and_finished_jobs(monkeypatch):
+    monkeypatch.setattr(app_module, "cancel_job", lambda job_id: None)
+    assert client.post("/jobs/nope/cancel").status_code == 404
+    monkeypatch.setattr(app_module, "cancel_job", lambda job_id: False)
+    assert client.post("/jobs/done/cancel").status_code == 409
+    monkeypatch.setattr(app_module, "cancel_job", lambda job_id: True)
+    assert client.post("/jobs/running/cancel").json() == {"cancelling": True}
