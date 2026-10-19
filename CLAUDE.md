@@ -36,6 +36,13 @@ didn't anticipate).
   (`LANGUAGES: dict[str, LanguageConfig]`, keyed by ISO-639-3 code, the format
   `ctc-forced-aligner` wants natively). Each `LanguageConfig` also carries the BCP 47 tag for
   `mux.py`, `strip_nikud`/`arabic_shaping` flags, and `is_rtl` - see Multi-language support below.
+- `src/karaoke_he/background.py` — the karaoke video's background ("Vinyl", matching the web app,
+  picked by the user from four mockups): title and artist top-left, a spinning record top-right,
+  clear of the lyric lines at the bottom. Pillow draws two stills (scene + record; titles go
+  through `subtitle_render._to_display_text` for RTL/Arabic, shrink to fit, then ellipsize);
+  ffmpeg renders exactly one 8-second turn and loops it with stream copy for the whole song (~8s
+  for a 4-minute song - rotating the record every frame for the full length took ~2 minutes).
+  The label carries off-center marks, since spinning concentric grooves alone looks static.
 - `src/karaoke_he/youtube.py` — downloads a song's audio from a pasted YouTube link instead of an
   uploaded file (`is_youtube_url`, `fetch_youtube_metadata`, `download_youtube_audio`, all via
   `yt-dlp`); see YouTube import below.

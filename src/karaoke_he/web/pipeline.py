@@ -13,6 +13,7 @@ from karaoke_he.alignment import (
     transcribe_diagnostic_region,
     try_correct_alignment,
 )
+from karaoke_he.background import render_vinyl_background
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import LyricsNotFoundError, load_manual_fallback, resolve_lyrics
 from karaoke_he.mux import mux_video
@@ -23,10 +24,6 @@ from karaoke_he.web.library import write_job_record
 from karaoke_he.youtube import download_youtube_audio
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-
-# Placeholder background: point 3 of the roadmap (a real background video) is deliberately
-# deferred - see CLAUDE.md. Generated fresh per job since each song has a different duration.
-PLACEHOLDER_BACKGROUND_COLOR = "0x1a1a2e"
 
 # Minimum region size (in low-confidence words) worth running diagnostic language-ID on. Tested
 # on a real song: single isolated words are usually just ordinary alignment noise, and Whisper's
@@ -131,31 +128,6 @@ def _format_time_range(start: float, end: float) -> str:
     """`m:ss`, or `m:ss–m:ss` when the region spans more than a rounded second."""
     start_str, end_str = _format_time(start), _format_time(end)
     return start_str if start_str == end_str else f"{start_str}–{end_str}"
-
-
-def _generate_placeholder_background(duration: float, output_path: Path) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        f"color=c={PLACEHOLDER_BACKGROUND_COLOR}:s=1920x1080:r=25",
-        "-t",
-        f"{duration + 0.5:.2f}",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        str(output_path),
-    ]
-    result = subprocess.run(cmd)
-    if result.returncode != 0:
-        raise PipelineError(f"ffmpeg failed generating the placeholder background (exit {result.returncode})")
-    return output_path
 
 
 STEMS_SOURCE_STAMP = ".source-sha256"
@@ -326,8 +298,8 @@ def run_pipeline(
     warnings = _format_low_confidence_warnings(words, separation.vocals_path, lyrics_text)
 
     on_progress("rendering_subtitles", None)
-    background_path = _generate_placeholder_background(
-        separation.duration_sec, work_dir / "mux" / "background.mp4"
+    background_path = render_vinyl_background(
+        separation.duration_sec, work_dir / "mux" / "background.mp4", title=title, artist=artist, language=language
     )
     overlay_path = work_dir / "subtitles" / "overlay.mov"
     composited_path = work_dir / "subtitles" / "background_with_subs.mp4"
