@@ -230,3 +230,13 @@ def test_create_job_accepts_youtube_url_and_forwards_it(monkeypatch):
     assert res.json() == {"job_id": "job123"}
     assert captured["input_audio"] is None
     assert captured["youtube_url"] == "https://youtu.be/abc123"
+
+
+def test_create_job_returns_409_while_the_same_song_is_generating(monkeypatch):
+    def _conflict(*args, **kwargs):
+        raise app_module.JobConflictError("a_b")
+
+    monkeypatch.setattr(app_module, "create_job", _conflict)
+    res = client.post("/jobs", data={"artist": "A", "title": "B", "youtube_url": "https://youtu.be/abc123"})
+    assert res.status_code == 409
+    assert "already being generated" in res.json()["detail"]

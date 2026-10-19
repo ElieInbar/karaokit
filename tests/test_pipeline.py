@@ -96,3 +96,32 @@ def test_format_low_confidence_warnings_uses_generic_message_outside_parentheses
 def test_format_time_range_collapses_same_second_and_uses_minutes():
     assert pipeline_module._format_time_range(36.2, 36.4) == "0:36"
     assert pipeline_module._format_time_range(210.7, 224.6) == "3:31–3:45"
+
+
+def test_pasted_lyrics_win_over_lrclib(monkeypatch, tmp_path):
+    def _fail_resolve(*args, **kwargs):
+        raise AssertionError("LRCLIB must not be consulted when the user pasted lyrics")
+
+    monkeypatch.setattr(pipeline_module, "resolve_lyrics", _fail_resolve)
+
+    result = pipeline_module._resolve_job_lyrics(
+        "a_b", "A", "B", "corrected line one\nline two", album=None, duration_sec=60.0, songs_dir=tmp_path
+    )
+
+    assert result.text == "corrected line one\nline two"
+    assert (tmp_path / "a_b" / "lyrics.txt").read_text(encoding="utf-8") == "corrected line one\nline two"
+
+
+def test_without_pasted_lyrics_falls_back_to_resolve_lyrics(monkeypatch, tmp_path):
+    sentinel = object()
+    monkeypatch.setattr(pipeline_module, "resolve_lyrics", lambda *args, **kwargs: sentinel)
+
+    assert pipeline_module._resolve_job_lyrics("a_b", "A", "B", "   ", album=None, duration_sec=60.0, songs_dir=tmp_path) is sentinel
+
+
+def test_stems_are_stale_unless_stamped_with_the_same_input(tmp_path):
+    assert pipeline_module._stems_are_stale(tmp_path, "abc")  # no stamp (legacy cache)
+
+    (tmp_path / pipeline_module.STEMS_SOURCE_STAMP).write_text("abc")
+    assert not pipeline_module._stems_are_stale(tmp_path, "abc")
+    assert pipeline_module._stems_are_stale(tmp_path, "def")  # different audio, same song name

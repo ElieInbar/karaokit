@@ -1,19 +1,48 @@
+import shutil
 import threading
+import traceback
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import requests
+
+from karaoke_he.alignment import AlignmentError
 from karaoke_he.languages import DEFAULT_LANGUAGE
-from karaoke_he.web.pipeline import run_pipeline
+from karaoke_he.web.pipeline import PipelineError, run_pipeline
+from karaoke_he.youtube import YouTubeError
+
+FINISHED_STATUSES = {"done", "error"}
+
+
+class JobConflictError(RuntimeError):
+    """Another job for the same song is still running - both would write into the same
+    `work/<song_slug>/` directory at once."""
+
+
+def user_facing_error(exc: Exception, stage: str) -> str:
+    """Turns a pipeline exception into a message for the web UI. The raw exception (often a URL,
+    an HTTP status line or an ffmpeg exit code) is still printed to the server log in full."""
+    if isinstance(exc, requests.exceptions.RequestException):
+        return "The lyrics service (LRCLIB) isn't responding right now. Try again in a few minutes."
+    if isinstance(exc, YouTubeError):
+        if "403" in str(exc):
+            return "YouTube refused the download - this happens now and then. Try again in a moment."
+        return "Couldn't download the audio from YouTube. Check the link and try again."
+    if isinstance(exc, (PipelineError, AlignmentError)):
+        return str(exc)
+    return f"Something went wrong during the {stage.replace('_', ' ')} step. Details are in the server log."
 
 
 @dataclass
 class Job:
     id: str
+    song_slug: str = ""
     status: str = "queued"
     detail: str | None = None
     error: str | None = None
     output_path: Path | None = None
+    preview_path: Path | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -31,8 +60,10 @@ def create_job(
     manual_lyrics: str | None = None,
     language: str = DEFAULT_LANGUAGE,
 ) -> Job:
-    job = Job(id=uuid.uuid4().hex[:12])
+    job = Job(id=uuid.uuid4().hex[:12], song_slug=song_slug)
     with _lock:
+        if any(j.song_slug == song_slug and j.status not in FINISHED_STATUSES for j in _jobs.values()):
+            raise JobConflictError(song_slug)
         _jobs[job.id] = job
 
     def _on_progress(stage: str, detail: str | None = None) -> None:
@@ -56,11 +87,18 @@ def create_job(
             with _lock:
                 job.status = "done"
                 job.output_path = result.output_path
+                job.preview_path = result.preview_path
                 job.warnings = result.warnings
         except Exception as exc:  # noqa: BLE001 - surfaced to the caller via job.error, not raised
+            traceback.print_exc()
             with _lock:
+                job.error = user_facing_error(exc, job.status)
                 job.status = "error"
-                job.error = str(exc)
+        finally:
+            # An upload lives in its own temp dir (see app.py); the pipeline copies it into
+            # work/<slug>/ first thing, so the temp copy is never needed again.
+            if input_audio is not None and Path(input_audio).parent.name.startswith("karaoke_he_upload_"):
+                shutil.rmtree(Path(input_audio).parent, ignore_errors=True)
 
     threading.Thread(target=_run, daemon=True).start()
     return job

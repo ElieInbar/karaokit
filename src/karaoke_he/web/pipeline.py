@@ -1,3 +1,4 @@
+import hashlib
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -13,7 +14,7 @@ from karaoke_he.alignment import (
     try_correct_alignment,
 )
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
-from karaoke_he.lyrics import LyricsNotFoundError, resolve_lyrics
+from karaoke_he.lyrics import LyricsNotFoundError, load_manual_fallback, resolve_lyrics
 from karaoke_he.mux import mux_video
 from karaoke_he.separation import separate_audio_remote
 from karaoke_he.subtitle_render import burn_overlay, render_overlay_video
@@ -42,6 +43,9 @@ class PipelineError(RuntimeError):
 class PipelineResult:
     output_path: Path
     warnings: list[str] = field(default_factory=list)
+    # Same video + the instrumental re-encoded as AAC in an .mp4, for in-browser playback only:
+    # browsers can't play the .mkv's uncompressed PCM audio (and Safari can't play .mkv at all).
+    preview_path: Path | None = None
 
 
 def _region_overlaps_parentheses(region, words: list[WordTimestamp], parenthetical_indices: set[int]) -> bool:
@@ -153,6 +157,89 @@ def _generate_placeholder_background(duration: float, output_path: Path) -> Path
     return output_path
 
 
+STEMS_SOURCE_STAMP = ".source-sha256"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _stems_are_stale(stems_dir: Path, input_hash: str) -> bool:
+    """Separation output is cached per song slug (artist + title), so a re-run with a *different*
+    audio file under the same names - another upload, a live version, another YouTube video -
+    would otherwise silently reuse the old stems. The stems dir records which input it came from;
+    a missing record (stems from before this check existed) counts as stale too."""
+    stamp = stems_dir / STEMS_SOURCE_STAMP
+    return not stamp.is_file() or stamp.read_text().strip() != input_hash
+
+
+def _make_browser_preview(video_path: Path, instrumental_path: Path, output_path: Path) -> Path:
+    """Muxes the (already h264) karaoke video with the instrumental as AAC into a fast-start .mp4
+    that browsers can play inline. The video stream is copied, not re-encoded, so this is quick."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        "error",
+        "-i",
+        str(video_path),
+        "-i",
+        str(instrumental_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        raise PipelineError(f"ffmpeg failed building the browser preview (exit {result.returncode})")
+    return output_path
+
+
+def _resolve_job_lyrics(
+    song_slug: str,
+    artist: str,
+    title: str,
+    manual_lyrics: str | None,
+    *,
+    album: str | None,
+    duration_sec: float,
+    songs_dir: Path | None = None,
+):
+    """Lyrics the user pasted or edited in the form win over LRCLIB: they're either the only
+    lyrics available, or a deliberate correction - silently replacing them with LRCLIB's version
+    (`resolve_lyrics`' normal order) would throw that correction away. They're also saved to
+    `songs/<slug>/lyrics.txt`, so a later run without pasted lyrics still has them as a fallback."""
+    songs_dir = songs_dir or PROJECT_ROOT / "songs"
+    if manual_lyrics and manual_lyrics.strip():
+        song_dir = songs_dir / song_slug
+        song_dir.mkdir(parents=True, exist_ok=True)
+        (song_dir / "lyrics.txt").write_text(manual_lyrics, encoding="utf-8")
+        result = load_manual_fallback(song_slug, songs_dir)
+        if result is not None:
+            return result
+    try:
+        return resolve_lyrics(
+            song_slug, artist, title, songs_dir=songs_dir, album=album, duration_sec=duration_sec
+        )
+    except LyricsNotFoundError as exc:
+        raise PipelineError(str(exc)) from exc
+
+
 def run_pipeline(
     song_slug: str,
     input_audio: Path | None,
@@ -176,11 +263,10 @@ def run_pipeline(
     when `youtube_url` is set, the audio is downloaded as the pipeline's first stage instead of
     copying a local file in.
 
-    `manual_lyrics`, if given, is written to `songs/<song_slug>/lyrics.txt` before resolving
-    lyrics, so it's picked up by `resolve_lyrics`'s existing LRCLIB-then-manual-fallback logic
-    unchanged - this is how a user unblocks a song LRCLIB doesn't have without touching the
-    filesystem directly, since the "fully automatic" pipeline otherwise has no way to ask for
-    lyrics mid-run.
+    `manual_lyrics`, if given, is written to `songs/<song_slug>/lyrics.txt` and used as-is,
+    *ahead of* LRCLIB - it's either the only lyrics available (a song LRCLIB doesn't have) or a
+    deliberate correction of LRCLIB's version. Without it, `resolve_lyrics`' normal
+    LRCLIB-then-manual-file order applies.
 
     `language` is one of `languages.LANGUAGES`'s keys (an ISO-639-3 code); the caller (`jobs.py`)
     is expected to have already validated it.
@@ -198,26 +284,20 @@ def run_pipeline(
         local_input.write_bytes(Path(input_audio).read_bytes())
 
     on_progress("separating", None)
+    stems_dir = work_dir / "stems"
+    input_hash = _file_sha256(local_input)
     separation = separate_audio_remote(
-        local_input, work_dir / "stems", on_progress=lambda msg: on_progress("separating", msg)
+        local_input,
+        stems_dir,
+        overwrite=_stems_are_stale(stems_dir, input_hash),
+        on_progress=lambda msg: on_progress("separating", msg),
     )
+    (stems_dir / STEMS_SOURCE_STAMP).write_text(input_hash)
 
     on_progress("lyrics", None)
-    if manual_lyrics:
-        song_dir = PROJECT_ROOT / "songs" / song_slug
-        song_dir.mkdir(parents=True, exist_ok=True)
-        (song_dir / "lyrics.txt").write_text(manual_lyrics, encoding="utf-8")
-    try:
-        lyrics_result = resolve_lyrics(
-            song_slug,
-            artist,
-            title,
-            songs_dir=PROJECT_ROOT / "songs",
-            album=album,
-            duration_sec=separation.duration_sec,
-        )
-    except LyricsNotFoundError as exc:
-        raise PipelineError(str(exc)) from exc
+    lyrics_result = _resolve_job_lyrics(
+        song_slug, artist, title, manual_lyrics, album=album, duration_sec=separation.duration_sec
+    )
 
     lang_config = LANGUAGES[language]
     lyrics_text = lyrics_result.text
@@ -269,5 +349,9 @@ def run_pipeline(
         language=lang_config.bcp47,
     )
 
+    preview_path = _make_browser_preview(
+        composited_path, separation.instrumental_path, work_dir / "mux" / f"{song_slug}_preview.mp4"
+    )
+
     on_progress("done", None)
-    return PipelineResult(output_path=output_path, warnings=warnings)
+    return PipelineResult(output_path=output_path, warnings=warnings, preview_path=preview_path)

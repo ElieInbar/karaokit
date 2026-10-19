@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from karaoke_he.language_detect import detect_language
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import fetch_from_lrclib, search_suggestions
-from karaoke_he.web.jobs import create_job, get_job
+from karaoke_he.web.jobs import JobConflictError, create_job, get_job
 from karaoke_he.youtube import YouTubeError, extract_lyrics_from_description, fetch_youtube_metadata, is_youtube_url
 
 app = FastAPI(title="Karaokit")
@@ -150,16 +150,19 @@ async def create_job_endpoint(
         input_path = tmp_dir / (file.filename or "input.mp3")
         input_path.write_bytes(await file.read())
 
-    job = create_job(
-        song_slug,
-        input_path,
-        artist,
-        title,
-        youtube_url=youtube_url or None,
-        album=album or None,
-        manual_lyrics=lyrics or None,
-        language=language,
-    )
+    try:
+        job = create_job(
+            song_slug,
+            input_path,
+            artist,
+            title,
+            youtube_url=youtube_url or None,
+            album=album or None,
+            manual_lyrics=lyrics or None,
+            language=language,
+        )
+    except JobConflictError:
+        raise HTTPException(409, "A video for this song is already being generated - wait for it to finish.")
     return {"job_id": job.id}
 
 
@@ -174,8 +177,17 @@ def job_status(job_id: str) -> dict:
         "detail": job.detail,
         "error": job.error,
         "done": job.status == "done",
+        "has_preview": job.preview_path is not None,
         "warnings": job.warnings,
     }
+
+
+@app.get("/jobs/{job_id}/preview")
+def job_preview(job_id: str) -> FileResponse:
+    job = get_job(job_id)
+    if job is None or job.preview_path is None:
+        raise HTTPException(404, "Preview not ready")
+    return FileResponse(job.preview_path, media_type="video/mp4")
 
 
 @app.get("/jobs/{job_id}/video")

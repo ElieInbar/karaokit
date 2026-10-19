@@ -537,8 +537,8 @@
     <div class="lyrics-preview" id="lyrics-preview" hidden></div>
 
     <div class="field">
-      <label for="lyrics">Lyrics <span class="hint">(optional — only needed if the song isn't found on LRCLIB)</span></label>
-      <textarea id="lyrics" name="lyrics" rows="6" placeholder="Paste the lyrics here if you get a &quot;lyrics not found&quot; error"></textarea>
+      <label for="lyrics">Your lyrics <span class="hint">(optional — if filled, used instead of LRCLIB's)</span></label>
+      <textarea id="lyrics" name="lyrics" rows="6" placeholder="Paste lyrics here if the song isn't on LRCLIB, or to correct LRCLIB's version"></textarea>
     </div>
 
     <button type="submit" id="generate-btn" disabled title="Check lyrics (or paste them below) first">
@@ -557,6 +557,22 @@
 <script>
 // Disables a button while its request runs and shows its spinner - kept separate from plain
 // `disabled`, which Generate also uses for "not ready yet" (lyrics not checked).
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// FastAPI errors come back as {"detail": "..."}; fall back to the raw body otherwise.
+async function errorMessage(res) {
+  const body = await res.text();
+  try {
+    return JSON.parse(body).detail || body;
+  } catch {
+    return body;
+  }
+}
+
 function setBusy(btn, busy) {
   btn.disabled = busy;
   btn.classList.toggle("loading", busy);
@@ -621,12 +637,6 @@ function setupAutocomplete(inputId, listId) {
       list.appendChild(li);
     });
     list.hidden = suggestions.length === 0;
-  }
-
-  function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
   }
 
   function updateActive() {
@@ -719,7 +729,7 @@ fetchYoutubeBtn.addEventListener("click", async () => {
 
   try {
     const res = await fetch(`/api/youtube-metadata?url=${encodeURIComponent(url)}`);
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorMessage(res));
     const data = await res.json();
     artistInput.value = data.suggested_artist;
     titleInput.value = data.suggested_title;
@@ -803,7 +813,7 @@ checkLyricsBtn.addEventListener("click", async () => {
       params.set("youtube_url", youtubeUrlInput.value.trim());
     }
     const res = await fetch(`/api/lyrics-check?${params}`);
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorMessage(res));
     const data = await res.json();
 
     if (data.found) {
@@ -899,11 +909,11 @@ form.addEventListener("submit", async (e) => {
   let jobId;
   try {
     const res = await fetch("/jobs", { method: "POST", body: formData });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await errorMessage(res));
     ({ job_id: jobId } = await res.json());
   } catch (err) {
     statusDiv.className = "error";
-    stageLabelDiv.textContent = "Upload failed: " + err.message;
+    stageLabelDiv.textContent = "Couldn't start: " + err.message;
     progressTrack.style.display = "none";
     setBusy(button, false);
     return;
@@ -917,7 +927,7 @@ form.addEventListener("submit", async (e) => {
       clearInterval(pollTimer);
       statusDiv.className = "error";
       progressTrack.style.display = "none";
-      let message = STAGE_LABELS.error + ": " + job.error;
+      let message = escapeHtml(job.error);
       if (job.error && job.error.includes("No lyrics found")) {
         message += "<br><br>Paste the lyrics into the \"Lyrics\" field above and try again — " +
           "the separation step already ran, so it'll be reused and this will be faster.";
@@ -932,11 +942,11 @@ form.addEventListener("submit", async (e) => {
       statusDiv.className = "done";
       progressTrack.style.display = "none";
       stageLabelDiv.textContent = STAGE_LABELS.done;
-      let html = `<a class="download" href="/jobs/${jobId}/video" download>Download video (.mkv)</a>` +
-        `<video controls src="/jobs/${jobId}/video"></video>`;
+      let html = `<a class="download" href="/jobs/${jobId}/video" download>Download video (.mkv)</a>`;
+      if (job.has_preview) html += `<video controls preload="metadata" src="/jobs/${jobId}/preview"></video>`;
       if (job.warnings && job.warnings.length) {
         html += `<div class="warnings">${job.warnings.length} passage${job.warnings.length === 1 ? "" : "s"} to double-check:` +
-          `<ul>${job.warnings.map(w => `<li>${w}</li>`).join("")}</ul></div>`;
+          `<ul>${job.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div>`;
       }
       resultDiv.innerHTML = html;
       setBusy(button, false);

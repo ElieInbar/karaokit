@@ -309,6 +309,26 @@ manual-fallback mechanism once the real job runs - `resolve_lyrics` itself has n
 video or its description exists, so this is the only way a description-only match actually reaches
 the pipeline (LRCLIB may not have the song at all).
 
+## Web app job behavior (lyrics priority, stem cache, preview, errors)
+
+- **Lyrics typed/pasted in the form win over LRCLIB** (`web/pipeline.py`'s `_resolve_job_lyrics`):
+  they're either the only lyrics available or a deliberate correction. They're still saved to
+  `songs/<slug>/lyrics.txt`. (Previously they were only a fallback, so a correction was silently
+  ignored whenever LRCLIB had the song.) Lyrics found in a YouTube description land in that same
+  field, so they also take priority.
+- **Separated stems are tied to the exact input audio**: `work/<slug>/stems/.source-sha256` records
+  the SHA-256 of the input they came from; a different file under the same artist/title (another
+  upload, a live version, another video) triggers a fresh separation instead of silently reusing
+  the old stems. A missing stamp (stems from before this check) counts as stale.
+- **In-browser preview**: the `.mkv`'s PCM audio can't be played by browsers (and Safari can't play
+  `.mkv` at all), so the pipeline also writes `<slug>_preview.mp4` (video stream copied, instrumental
+  as AAC) served by `GET /jobs/{id}/preview`; the `.mkv` stays the download.
+- **One running job per song**: `POST /jobs` answers 409 while another job for the same slug is
+  still running, since both would write into the same `work/<slug>/`.
+- **User-facing errors**: `web/jobs.py`'s `user_facing_error` turns exceptions into readable
+  messages (LRCLIB down, YouTube 403, ...); the full traceback still goes to the server log.
+  The page escapes all server-provided text before inserting it.
+
 ## Language auto-detection
 
 Once lyrics are found via `GET /api/lyrics-check` (the same request that backs the "Check lyrics"
