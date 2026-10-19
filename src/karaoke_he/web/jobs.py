@@ -23,9 +23,10 @@ _lock = threading.Lock()
 
 def create_job(
     song_slug: str,
-    input_audio: Path,
+    input_audio: Path | None,
     artist: str,
     title: str,
+    youtube_url: str | None = None,
     album: str | None = None,
     manual_lyrics: str | None = None,
     language: str = DEFAULT_LANGUAGE,
@@ -46,6 +47,7 @@ def create_job(
                 input_audio,
                 artist,
                 title,
+                youtube_url=youtube_url,
                 album=album,
                 manual_lyrics=manual_lyrics,
                 language=language,

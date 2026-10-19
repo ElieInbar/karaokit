@@ -7,3 +7,4 @@ __pycache__/
 *.mkv
 *.egg-info/
 .DS_Store
+songs_examples/

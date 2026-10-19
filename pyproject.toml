@@ -26,6 +26,8 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
+    "yt-dlp",
+    "fast-langdetect",
 ]
 
 [project.optional-dependencies]

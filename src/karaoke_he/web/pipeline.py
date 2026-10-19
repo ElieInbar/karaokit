@@ -18,6 +18,7 @@ from karaoke_he.mux import mux_video
 from karaoke_he.separation import separate_audio_remote
 from karaoke_he.subtitle_render import burn_overlay, render_overlay_video
 from karaoke_he.text_utils import normalize_hebrew
+from karaoke_he.youtube import download_youtube_audio
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -144,10 +145,11 @@ def _generate_placeholder_background(duration: float, output_path: Path) -> Path
 
 def run_pipeline(
     song_slug: str,
-    input_audio: Path,
+    input_audio: Path | None,
     artist: str,
     title: str,
     *,
+    youtube_url: str | None = None,
     album: str | None = None,
     manual_lyrics: str | None = None,
     language: str = DEFAULT_LANGUAGE,
@@ -157,8 +159,12 @@ def run_pipeline(
     unchanged: separation (Modal GPU), lyrics resolution, forced alignment, the animated
     subtitle overlay, and muxing. `on_progress(stage, detail)` is called with a short stage name
     before each stage starts (`detail=None`), and again with a finer-grained `detail` string
-    whenever a stage itself reports progress (separation's "NN%", alignment's named sub-steps,
-    subtitle rendering's "NN%"), for a caller (the web job runner) to surface status.
+    whenever a stage itself reports progress (downloading/separation's "NN%", alignment's named
+    sub-steps, subtitle rendering's "NN%"), for a caller (the web job runner) to surface status.
+
+    Exactly one of `input_audio` (a local file, e.g. an upload) or `youtube_url` must be given;
+    when `youtube_url` is set, the audio is downloaded as the pipeline's first stage instead of
+    copying a local file in.
 
     `manual_lyrics`, if given, is written to `songs/<song_slug>/lyrics.txt` before resolving
     lyrics, so it's picked up by `resolve_lyrics`'s existing LRCLIB-then-manual-fallback logic
@@ -172,9 +178,16 @@ def run_pipeline(
     work_dir = PROJECT_ROOT / "work" / song_slug
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    if youtube_url:
+        on_progress("downloading", None)
+        local_input = download_youtube_audio(
+            youtube_url, work_dir, filename_stem="input", on_progress=lambda msg: on_progress("downloading", msg)
+        )
+    else:
+        local_input = work_dir / f"input{Path(input_audio).suffix}"
+        local_input.write_bytes(Path(input_audio).read_bytes())
+
     on_progress("separating", None)
-    local_input = work_dir / f"input{Path(input_audio).suffix}"
-    local_input.write_bytes(Path(input_audio).read_bytes())
     separation = separate_audio_remote(
         local_input, work_dir / "stems", on_progress=lambda msg: on_progress("separating", msg)
     )

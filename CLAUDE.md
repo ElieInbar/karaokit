@@ -36,6 +36,12 @@ didn't anticipate).
   (`LANGUAGES: dict[str, LanguageConfig]`, keyed by ISO-639-3 code, the format
   `ctc-forced-aligner` wants natively). Each `LanguageConfig` also carries the BCP 47 tag for
   `mux.py`, `strip_nikud`/`arabic_shaping` flags, and `is_rtl` - see Multi-language support below.
+- `src/karaoke_he/youtube.py` — downloads a song's audio from a pasted YouTube link instead of an
+  uploaded file (`is_youtube_url`, `fetch_youtube_metadata`, `download_youtube_audio`, all via
+  `yt-dlp`); see YouTube import below.
+- `src/karaoke_he/language_detect.py` — best-effort guess of a song's language from its fetched
+  lyrics text (`detect_language`, via `fast-langdetect`'s compressed fastText model), used to
+  prefill the web UI's language selector; see Language auto-detection below.
 - `src/karaoke_he/web/` — the local web app (English UI) that orchestrates all of the above into
   one job: `pipeline.py`'s `run_pipeline()` calls each stage function in sequence (unchanged - no
   logic is duplicated here) and returns a `PipelineResult` (output path + any alignment
@@ -259,6 +265,62 @@ left-to-right (confirmed by rendering an English test frame before the fix: "Wor
 Fixed via `LanguageConfig.is_rtl`, which flips the chunk draw order; a regression test
 (`test_render_line_frame_puts_sung_chunk_on_the_{left,right}_for_{ltr,rtl}_languages`) locks in
 the correct direction for both cases by checking pixel bounding boxes.
+
+## YouTube import
+
+The web app's audio source can be a pasted YouTube link instead of an uploaded file (a toggle in
+`static/index.html`). `youtube.py`'s `fetch_youtube_metadata` (no download) gives the frontend a
+suggested artist/title to prefill (preferring yt-dlp's `artist`/`track` fields when present, e.g.
+YouTube Music videos, else splitting the video title on `" - "`, else falling back to the
+uploader name) for the user to confirm - it deliberately feeds into the *same* lyrics-check/review
+gate as a normal upload, rather than trying to fully automate artist/title identification.
+`download_youtube_audio` only runs once a job is actually submitted, as a new `"downloading"`
+stage at the very start of `web/pipeline.py`'s `run_pipeline()` (before "separating"); it downloads
+the best available audio-only stream and converts it to WAV via yt-dlp's `FFmpegExtractAudio`
+postprocessor, and reports `"NN%"` progress the same way separation/rendering do. **The initial
+design skipped this re-encode** (downloading in the native container, reasoning that `audioread`
+was already a dependency for exactly this kind of format tolerance) - a real end-to-end test
+caught this as wrong: `separation.py`'s very first line, `sf.info(str(input_audio)).duration`,
+calls `soundfile`/libsndfile directly with no `audioread` fallback, and libsndfile cannot open
+YouTube's native webm/opus container at all (`Format not recognised`, confirmed live). `ffmpeg` is
+already a required system dependency (muxing/rendering), so the WAV conversion needs nothing new.
+`POST /jobs` requires exactly one of an uploaded `file` or a `youtube_url` (400 otherwise); the
+frontend enforces this by `disabled`-ing whichever input is inactive, which excludes it from the
+submitted `FormData` entirely rather than sending an empty value the backend has to special-case.
+
+Downloading audio from YouTube for personal use sits in a legal/ToS gray area (YouTube's terms
+prohibit downloading without explicit permission) - noted here since it's a real consideration for
+a tool built around it, not a blocker for a personal project.
+
+**Lyrics from the video description, checked before LRCLIB.** When `GET /api/lyrics-check` is
+called with a `youtube_url` (the YouTube-import flow only), `youtube.extract_lyrics_from_description`
+is tried first: many lyric-video uploads already embed the full lyrics under a "Lyrics:"/
+"Paroles:"/etc. header line (matched for all 6 supported languages), with trailing sections
+(another short heading, or trailing social/credit lines with no heading at all) trimmed off; a
+match shorter than `MIN_EXTRACTED_LYRICS_LENGTH` (60 chars - e.g. "Lyrics: see pinned comment") is
+treated as no match. Only when nothing usable is found there does the endpoint fall back to the
+normal LRCLIB lookup. A description match is reported as `source: "youtube_description"`; the
+frontend feeds that text straight into the manual-lyrics textarea (rather than treating it as
+"found" and stopping there) so it lands in `songs/<slug>/lyrics.txt` via the *existing*
+manual-fallback mechanism once the real job runs - `resolve_lyrics` itself has no idea a YouTube
+video or its description exists, so this is the only way a description-only match actually reaches
+the pipeline (LRCLIB may not have the song at all).
+
+## Language auto-detection
+
+Once lyrics are found via `GET /api/lyrics-check` (the same request that backs the "Check lyrics"
+button), the response also includes a `detected_language` guess from `language_detect.py`'s
+`detect_language`, run on the fetched lyrics text via `fast-langdetect`'s compressed `"lite"`
+fastText model (a few hundred KB, downloaded once and cached - chosen over the default ~125MB
+full model after confirming the lite model was already confidently correct, live, on real LRCLIB
+lyrics in all 6 supported languages). Detection below `language_detect.MIN_CONFIDENCE` (0.5), or a
+language outside the 6 supported ones, returns `None` and leaves the selector alone. The frontend
+auto-selects the matching `<option>` in the language `<select>` and shows a small "(detected: ...)"
+hint, but only until the user manually changes the selector themselves (`languageManuallySet` in
+`static/index.html`) - after that, detection only updates the hint text, never overrides the
+user's own choice. This matters most for the YouTube-import flow, where there's otherwise no
+language hint at all before alignment would run with a wrong `language` value (wrong RTL/LTR
+layout, wrong nikud-stripping, etc.).
 
 ## Detailed progress
 
