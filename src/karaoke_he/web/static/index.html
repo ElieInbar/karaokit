@@ -3,245 +3,417 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>karaoke_he</title>
+<title>Karaokit</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%231c1917'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%233a332b' stroke-width='1'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23e2492f'/%3E%3Ccircle cx='16' cy='16' r='1.5' fill='%23f6f0e4'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,700&display=swap" rel="stylesheet">
 <style>
+  /* "Vinyl" look: a record sleeve - cream paper, ink-black rules, one tomato-red accent. */
   :root {
-    --bg: #f0f0f5;
-    --card-bg: #ffffff;
-    --text: #1a1a2e;
-    --text-secondary: #6a6a80;
-    --border: #e2e2ec;
-    --accent: #1a1a2e;
-    --accent-contrast: #ffffff;
-    --track-bg: #e8e8f0;
-    --success-bg: #e2fde5;
-    --success-text: #1c6b2e;
-    --error-bg: #fde2e2;
-    --error-text: #9b1c1c;
-    --warning-bg: #fff6d9;
-    --warning-text: #7a5b00;
+    --page: #e9dfcd;
+    --paper: #f6f0e4;
+    --ink: #1c1917;
+    --ink-soft: #57534e;
+    --ink-faint: #a8a29e;
+    --rule: #1c1917;
+    --hairline: #d8ccb7;
+    --accent: #e2492f;
+    --accent-hover: #c93b23;
+    --on-accent: #fbf6ec;
+    --chip-on-bg: #1c1917;
+    --chip-on-text: #f6f0e4;
+    --groove-a: #1c1917;
+    --groove-b: #2c2723;
+    --success: #3f7d4f;
+    --error: #b42318;
+    --error-bg: #f8dfd6;
+    --done-bg: #e3ead9;
+    --warning-bg: #f4e5c2;
+    --warning-text: #6b4e0b;
+    --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
 
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0d0d16;
-      --card-bg: #17172a;
-      --text: #f0f0f5;
-      --text-secondary: #a0a0b8;
-      --border: #2a2a42;
-      --accent: #ffd200;
-      --accent-contrast: #1a1a2e;
-      --track-bg: #26263c;
-      --success-bg: #123321;
-      --success-text: #7fe3a0;
-      --error-bg: #3a1616;
-      --error-text: #ff9a9a;
-      --warning-bg: #3a2f0a;
-      --warning-text: #ffd76b;
+      --page: #12100d;
+      --paper: #1d1915;
+      --ink: #f3ece0;
+      --ink-soft: #b9b0a3;
+      --ink-faint: #6f675e;
+      --rule: #f3ece0;
+      --hairline: #3a332b;
+      --accent: #ef5a3c;
+      --accent-hover: #ff6d4f;
+      --on-accent: #1d1915;
+      --chip-on-bg: #f3ece0;
+      --chip-on-text: #1d1915;
+      --groove-a: #0b0907;
+      --groove-b: #3a332b;
+      --success: #8fcf9c;
+      --error: #ff9b85;
+      --error-bg: #3a1a12;
+      --done-bg: #1f2a1f;
+      --warning-bg: #352a12;
+      --warning-text: #f2cf7a;
     }
   }
 
   * { box-sizing: border-box; }
 
+  /* `display: flex` on buttons etc. would otherwise override the `hidden` attribute. */
+  [hidden] { display: none !important; }
+
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    background: var(--bg);
-    color: var(--text);
+    font-family: var(--font-body);
+    background: var(--page);
+    color: var(--ink);
     margin: 0;
     padding: 48px 16px;
     display: flex;
     justify-content: center;
+    -webkit-font-smoothing: antialiased;
   }
 
   .card {
     width: 100%;
     max-width: 640px;
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 32px;
+    background: var(--paper);
+    border-radius: 18px;
+    padding: 0 36px 36px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04), 0 18px 50px rgba(60, 40, 20, 0.12);
+  }
+
+  /* --- Masthead: title, tagline, a spinning record and a demo karaoke line --- */
+
+  .masthead {
+    position: relative;
+    overflow: hidden;
+    margin: 0 -36px;
+    padding: 40px 36px 0;
+    border-radius: 18px 18px 0 0;
+  }
+
+  .disc {
+    position: absolute;
+    right: -78px;
+    top: -78px;
+    width: 230px;
+    height: 230px;
+    border-radius: 50%;
+    background: repeating-radial-gradient(circle, var(--groove-a) 0 2px, var(--groove-b) 2px 4px);
+    animation: spin 12s linear infinite;
+  }
+
+  .disc::after {
+    content: "";
+    position: absolute;
+    inset: 82px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: inset 0 0 0 26px var(--accent), inset 0 0 0 30px rgba(0, 0, 0, 0.25);
   }
 
   h1 {
-    font-size: 1.5rem;
-    margin: 0 0 4px;
+    position: relative;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 2.6rem;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    margin: 0;
   }
+
+  h1 em { color: var(--accent); }
 
   .subtitle {
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-    margin: 0 0 28px;
+    position: relative;
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+    margin: 10px 0 26px;
+    max-width: 62%;
   }
 
-  .field {
-    margin-bottom: 18px;
+  .demo-line {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 1.6rem;
+    text-align: center;
+    border-top: 2px solid var(--rule);
+    border-bottom: 2px solid var(--rule);
+    padding: 14px 0;
+    margin: 0 0 30px;
   }
 
-  .field label {
+  .kline { position: relative; display: inline-block; white-space: nowrap; color: var(--ink-faint); }
+  .kline .fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 0;
+    overflow: hidden;
+    color: var(--accent);
+    animation: sweep 5s linear infinite;
+  }
+
+  @keyframes sweep { 0% { width: 0; } 75% { width: 100%; } 100% { width: 100%; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .disc, .kline .fill { animation: none; }
+    .kline .fill { width: 45%; }
+  }
+
+  /* --- Form --- */
+
+  .field { margin-bottom: 20px; }
+
+  .field > label, .section-label {
     display: block;
-    font-size: 0.85rem;
-    font-weight: 600;
-    margin-bottom: 6px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
   }
 
   .field .hint {
     font-weight: 400;
-    color: var(--text-secondary);
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ink-soft);
     font-size: 0.8rem;
   }
 
-  input[type=text], input[type=file], select, textarea {
+  input[type=text], select, textarea {
     width: 100%;
-    padding: 10px 12px;
-    font-size: 0.95rem;
+    padding: 8px 2px;
+    font-size: 1rem;
     font-family: inherit;
-    color: var(--text);
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    color: var(--ink);
+    background: transparent;
+    border: 0;
+    border-bottom: 1.5px solid var(--rule);
+    border-radius: 0;
   }
 
-  input:focus, select:focus, textarea:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
+  input[type=text]::placeholder, textarea::placeholder { color: var(--ink-faint); }
+
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    padding-right: 24px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--ink) 50%), linear-gradient(135deg, var(--ink) 50%, transparent 50%);
+    background-position: calc(100% - 10px) 55%, calc(100% - 5px) 55%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
   }
 
-  textarea { resize: vertical; }
+  select option { color: #1c1917; }
 
-  .row { display: flex; gap: 12px; }
-  .row > .field { flex: 1; }
+  textarea {
+    resize: vertical;
+    border: 1.5px solid var(--rule);
+    border-radius: 10px;
+    padding: 10px 12px;
+    line-height: 1.5;
+  }
+
+  input[type=file] {
+    width: 100%;
+    font-family: inherit;
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+    padding: 6px 0;
+    border-bottom: 1.5px solid var(--rule);
+  }
+
+  input[type=file]::file-selector-button {
+    font: 500 0.85rem var(--font-body);
+    color: var(--ink);
+    background: transparent;
+    border: 1.5px solid var(--rule);
+    border-radius: 999px;
+    padding: 6px 14px;
+    margin-right: 12px;
+    cursor: pointer;
+  }
+
+  input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 1.5px 0 0 var(--accent);
+  }
+
+  textarea:focus-visible { box-shadow: 0 0 0 1.5px var(--accent); }
+
+  .row { display: flex; gap: 20px; }
+  .row > .field { flex: 1; min-width: 0; }
+
+  @media (max-width: 520px) {
+    .card { padding: 0 20px 28px; }
+    .masthead { margin: 0 -20px; padding: 32px 20px 0; }
+    h1 { font-size: 2.1rem; }
+    .row { flex-direction: column; gap: 0; }
+    .demo-line { font-size: 1.3rem; }
+  }
+
+  /* Audio source radios rendered as pill chips; the real radio inputs stay in the DOM (and
+     keyboard-focusable) for the existing JS, just visually hidden. */
+  .source-toggle { display: flex; gap: 8px; flex-wrap: wrap; }
+  .source-toggle label {
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 16px;
+    border: 1.5px solid var(--rule);
+    border-radius: 999px;
+    font-size: 0.88rem;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  .source-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+  .source-toggle label:has(input:checked) { background: var(--chip-on-bg); color: var(--chip-on-text); }
+  .source-toggle label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   .autocomplete { position: relative; }
 
   .suggestions {
     list-style: none;
-    margin: 4px 0 0;
+    margin: 6px 0 0;
     padding: 4px;
     position: absolute;
     top: 100%;
     left: 0;
     right: 0;
     z-index: 10;
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    background: var(--paper);
+    border: 1.5px solid var(--rule);
+    border-radius: 10px;
+    box-shadow: 0 12px 30px rgba(40, 25, 10, 0.18);
     max-height: 260px;
     overflow-y: auto;
   }
 
   .suggestions[hidden] { display: none; }
 
-  .suggestions li {
-    padding: 8px 10px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.9rem;
-  }
+  .suggestions li { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+  .suggestions li .s-title { font-weight: 700; }
+  .suggestions li .s-artist { color: var(--ink-soft); }
+  .suggestions li .s-album { color: var(--ink-soft); font-size: 0.8rem; }
+  .suggestions li:hover, .suggestions li.active { background: var(--hairline); }
 
-  .suggestions li .s-title { font-weight: 600; }
-  .suggestions li .s-artist { color: var(--text-secondary); }
-  .suggestions li .s-album { color: var(--text-secondary); font-size: 0.8rem; }
-
-  .suggestions li:hover, .suggestions li.active { background: var(--track-bg); }
+  /* --- Buttons --- */
 
   button {
     width: 100%;
-    margin-top: 8px;
-    padding: 13px 20px;
+    margin-top: 10px;
+    padding: 15px 22px;
+    font-family: var(--font-body);
     font-size: 1rem;
-    font-weight: 600;
-    color: var(--accent-contrast);
+    font-weight: 700;
+    color: var(--on-accent);
     background: var(--accent);
     border: none;
-    border-radius: 8px;
+    border-radius: 999px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
+    transition: background 0.15s, transform 0.1s;
   }
 
-  button:disabled { opacity: 0.65; cursor: default; }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:active:not(:disabled) { transform: scale(0.99); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
   button.secondary {
     width: auto;
-    color: var(--text);
+    margin-top: 0;
+    color: var(--ink);
     background: transparent;
-    border: 1px solid var(--border);
-    padding: 8px 14px;
+    border: 1.5px solid var(--rule);
+    padding: 7px 16px;
     font-size: 0.85rem;
+    font-weight: 500;
   }
 
-  .source-toggle { display: flex; gap: 18px; font-size: 0.9rem; margin-bottom: 10px; }
-  .source-toggle label { display: flex; align-items: center; gap: 6px; font-weight: 400; cursor: pointer; }
-  .source-toggle input { margin: 0; }
-
-  .youtube-row { display: flex; gap: 8px; }
-  .youtube-row input { flex: 1; }
-  .youtube-row button { flex-shrink: 0; width: auto; margin-top: 0; }
-
-  .lyrics-check-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
-
-  .lyrics-status { font-size: 0.85rem; font-weight: 600; }
-  .lyrics-status.found { color: var(--success-text); }
-  .lyrics-status.not-found { color: var(--error-text); }
-  .lyrics-status.checking { color: var(--text-secondary); font-weight: 400; }
-
-  .lyrics-preview {
-    margin-top: 10px;
-    margin-bottom: 18px;
-    padding: 12px 14px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    max-height: 240px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    font-size: 0.9rem;
-    line-height: 1.5;
-  }
+  button.secondary:hover:not(:disabled) { background: var(--hairline); }
 
   .spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid var(--accent-contrast);
+    border: 2px solid currentColor;
     border-top-color: transparent;
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
     display: none;
   }
 
-  button:disabled .spinner { display: inline-block; }
+  /* Only while actually working - a merely-disabled button (e.g. Generate before lyrics are
+     checked) shouldn't look like it's loading. */
+  button.loading .spinner { display: inline-block; }
 
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  .youtube-row { display: flex; gap: 10px; align-items: center; }
+  .youtube-row input { flex: 1; }
+
+  .lyrics-check-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 20px; }
+
+  .lyrics-status { display: inline-block; font-size: 0.85rem; font-weight: 500; margin-top: 8px; }
+  .lyrics-check-row .lyrics-status { margin-top: 0; }
+  .lyrics-status.found { color: var(--success); }
+  .lyrics-status.not-found { color: var(--error); }
+  .lyrics-status.checking { color: var(--ink-soft); font-weight: 400; }
+
+  .lyrics-preview {
+    margin: -6px 0 20px;
+    padding: 14px 16px;
+    border-left: 3px solid var(--accent);
+    background: var(--hairline);
+    border-radius: 0 10px 10px 0;
+    max-height: 240px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    font-size: 0.9rem;
+    line-height: 1.6;
+  }
+
+  /* --- Job status / result --- */
+
   #status {
-    margin-top: 24px;
-    padding: 16px;
-    border-radius: 10px;
-    background: var(--track-bg);
+    margin-top: 26px;
+    padding: 18px 20px;
+    border-radius: 14px;
+    border: 1.5px solid var(--rule);
     display: none;
   }
 
-  #status.error { background: var(--error-bg); color: var(--error-text); }
-  #status.done { background: var(--success-bg); color: var(--success-text); }
+  #status.error { background: var(--error-bg); color: var(--error); border-color: var(--error); }
+  #status.done { background: var(--done-bg); color: var(--ink); }
 
-  .stage-label { font-size: 0.9rem; font-weight: 600; margin-bottom: 10px; }
+  .stage-label { font-size: 0.92rem; font-weight: 500; margin-bottom: 10px; overflow-wrap: anywhere; }
+  #status.done .stage-label { font-family: var(--font-display); font-size: 1.4rem; font-weight: 700; color: var(--success); }
 
   .progress-track {
     width: 100%;
-    height: 8px;
-    border-radius: 4px;
-    background: var(--track-bg);
+    height: 5px;
+    border-radius: 5px;
+    background: var(--hairline);
     overflow: hidden;
     position: relative;
   }
 
   .progress-fill {
     height: 100%;
-    background: var(--accent);
-    border-radius: 4px;
+    background: var(--ink);
+    border-radius: 5px;
     transition: width 0.3s ease;
   }
 
@@ -255,27 +427,31 @@
     100% { transform: translateX(250%); }
   }
 
-  video {
-    width: 100%;
-    border-radius: 8px;
-    margin-top: 14px;
-    display: block;
-  }
+  video { width: 100%; border-radius: 10px; margin-top: 14px; display: block; background: #000; }
 
   a.download {
-    display: inline-block;
-    margin-top: 4px;
-    font-weight: 600;
-    color: inherit;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 18px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 700;
+    font-size: 0.9rem;
+    text-decoration: none;
   }
+
+  a.download:hover { background: var(--accent-hover); }
 
   .warnings {
     margin-top: 14px;
-    padding: 12px 14px;
+    padding: 12px 16px;
     background: var(--warning-bg);
     color: var(--warning-text);
-    border-radius: 8px;
+    border-radius: 10px;
     font-size: 0.85rem;
+    line-height: 1.5;
   }
 
   .warnings ul { margin: 6px 0 0; padding-left: 20px; }
@@ -284,15 +460,21 @@
 </head>
 <body>
 <div class="card">
-  <h1>karaoke_he</h1>
-  <p class="subtitle">Turn a song into a karaoke video with an animated highlight.</p>
+  <header class="masthead">
+    <div class="disc" aria-hidden="true"></div>
+    <h1>Karao<em>kit</em></h1>
+    <p class="subtitle">Turn any song into a karaoke video with an animated, word-by-word highlight.</p>
+    <div class="demo-line" aria-hidden="true">
+      <span class="kline">Sing along, word by word<span class="fill">Sing along, word by word</span></span>
+    </div>
+  </header>
 
   <form id="job-form">
     <div class="field">
-      <label>Audio source</label>
+      <span class="section-label">Audio source</span>
       <div class="source-toggle">
-        <label><input type="radio" name="source-mode" value="file" id="source-file" checked> Upload a file</label>
-        <label><input type="radio" name="source-mode" value="youtube" id="source-youtube"> Paste a YouTube link</label>
+        <label><input type="radio" name="source-mode" value="file" id="source-file" checked>Upload a file</label>
+        <label><input type="radio" name="source-mode" value="youtube" id="source-youtube">YouTube link</label>
       </div>
     </div>
 
@@ -373,6 +555,13 @@
 </div>
 
 <script>
+// Disables a button while its request runs and shows its spinner - kept separate from plain
+// `disabled`, which Generate also uses for "not ready yet" (lyrics not checked).
+function setBusy(btn, busy) {
+  btn.disabled = busy;
+  btn.classList.toggle("loading", busy);
+}
+
 const STAGE_LABELS = {
   queued: "Queued...",
   downloading: "Downloading audio from YouTube...",
@@ -523,7 +712,7 @@ fetchYoutubeBtn.addEventListener("click", async () => {
     return;
   }
 
-  fetchYoutubeBtn.disabled = true;
+  setBusy(fetchYoutubeBtn, true);
   youtubeStatus.hidden = false;
   youtubeStatus.className = "lyrics-status checking";
   youtubeStatus.textContent = "Fetching video info...";
@@ -541,7 +730,7 @@ fetchYoutubeBtn.addEventListener("click", async () => {
     youtubeStatus.className = "lyrics-status not-found";
     youtubeStatus.textContent = "Could not fetch video info: " + err.message;
   } finally {
-    fetchYoutubeBtn.disabled = false;
+    setBusy(fetchYoutubeBtn, false);
   }
 });
 
@@ -599,7 +788,7 @@ checkLyricsBtn.addEventListener("click", async () => {
     return;
   }
 
-  checkLyricsBtn.disabled = true;
+  setBusy(checkLyricsBtn, true);
   lyricsStatus.hidden = false;
   lyricsStatus.className = "lyrics-status checking";
   lyricsStatus.textContent = "Checking lyrics...";
@@ -647,7 +836,7 @@ checkLyricsBtn.addEventListener("click", async () => {
     lyricsStatus.className = "lyrics-status not-found";
     lyricsStatus.textContent = "Lyrics check failed: " + err.message;
   } finally {
-    checkLyricsBtn.disabled = false;
+    setBusy(checkLyricsBtn, false);
     updateGenerateButtonState();
   }
 });
@@ -674,7 +863,7 @@ function progressPercent(stage, detail) {
 }
 
 const form = document.getElementById("job-form");
-const button = form.querySelector("button");
+const button = generateBtn;
 const statusDiv = document.getElementById("status");
 const stageLabelDiv = statusDiv.querySelector(".stage-label");
 const progressTrack = statusDiv.querySelector(".progress-track");
@@ -699,7 +888,8 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
   clearInterval(pollTimer);
   const formData = new FormData(form);
-  button.disabled = true;
+  setBusy(button, true);
+  progressTrack.style.display = "";
 
   statusDiv.style.display = "block";
   statusDiv.className = "";
@@ -715,7 +905,7 @@ form.addEventListener("submit", async (e) => {
     statusDiv.className = "error";
     stageLabelDiv.textContent = "Upload failed: " + err.message;
     progressTrack.style.display = "none";
-    button.disabled = false;
+    setBusy(button, false);
     return;
   }
 
@@ -733,7 +923,7 @@ form.addEventListener("submit", async (e) => {
           "the separation step already ran, so it'll be reused and this will be faster.";
       }
       stageLabelDiv.innerHTML = message;
-      button.disabled = false;
+      setBusy(button, false);
       return;
     }
 
@@ -745,11 +935,11 @@ form.addEventListener("submit", async (e) => {
       let html = `<a class="download" href="/jobs/${jobId}/video" download>Download video (.mkv)</a>` +
         `<video controls src="/jobs/${jobId}/video"></video>`;
       if (job.warnings && job.warnings.length) {
-        html += `<div class="warnings">⚠️ ${job.warnings.length} passage(s) to double-check:` +
+        html += `<div class="warnings">${job.warnings.length} passage${job.warnings.length === 1 ? "" : "s"} to double-check:` +
           `<ul>${job.warnings.map(w => `<li>${w}</li>`).join("")}</ul></div>`;
       }
       resultDiv.innerHTML = html;
-      button.disabled = false;
+      setBusy(button, false);
       return;
     }
 

@@ -12,7 +12,7 @@ from karaoke_he.lyrics import fetch_from_lrclib, search_suggestions
 from karaoke_he.web.jobs import create_job, get_job
 from karaoke_he.youtube import YouTubeError, extract_lyrics_from_description, fetch_youtube_metadata, is_youtube_url
 
-app = FastAPI(title="karaoke_he")
+app = FastAPI(title="Karaokit")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 

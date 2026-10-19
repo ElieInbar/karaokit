@@ -42,7 +42,8 @@ didn't anticipate).
 - `src/karaoke_he/language_detect.py` — best-effort guess of a song's language from its fetched
   lyrics text (`detect_language`, via `fast-langdetect`'s compressed fastText model), used to
   prefill the web UI's language selector; see Language auto-detection below.
-- `src/karaoke_he/web/` — the local web app (English UI) that orchestrates all of the above into
+- `src/karaoke_he/web/` — the local web app, branded **Karaokit** (English UI; the Python package
+  itself is still named `karaoke_he`), that orchestrates all of the above into
   one job: `pipeline.py`'s `run_pipeline()` calls each stage function in sequence (unchanged - no
   logic is duplicated here) and returns a `PipelineResult` (output path + any alignment
   low-confidence warnings, see Alignment below); `jobs.py` runs it in a background thread per
@@ -51,10 +52,12 @@ didn't anticipate).
   and a finer-grained `detail` string; `app.py` is the FastAPI app (`POST /jobs` - takes
   `language` as one of `languages.LANGUAGES`'s keys, 400 on an unknown code -, `GET /jobs/{id}`
   - returns `status`/`detail`/`warnings`/`error`/`done` -, `GET /jobs/{id}/video`); `static/
-  index.html` is a single dependency-free HTML/CSS/JS page with a language `<select>`, a real
-  progress bar driven by `detail` (see Detailed progress below), and automatic dark mode via
-  `prefers-color-scheme` (accent color doubles as the dark-mode variant of the karaoke highlight's
-  own gold, `#ffd200`, tying the UI to the rendered video's own palette). Run locally with
+  index.html` is a single HTML/CSS/JS page (no JS dependencies; only Google Fonts - Fraunces + DM
+  Sans - with system-font fallbacks) with a language `<select>`, a real progress bar driven by
+  `detail` (see Detailed progress below), and a "Vinyl" record-sleeve look (cream paper, ink
+  rules, one tomato-red accent, spinning-record masthead) with automatic dark mode via
+  `prefers-color-scheme` - picked by the user from four mockups. All user-facing text, including
+  the alignment warnings built in `web/pipeline.py`, is English. Run locally with
   `uvicorn karaoke_he.web.app:app --host 127.0.0.1 --port 8000`, then open
   `http://127.0.0.1:8000`. Uses `separate_audio_remote` (Modal), never the local `separate_audio`.
 - `songs/<slug>/` — small, git-tracked, human-authored inputs per song: `meta.json`
