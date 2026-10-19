@@ -19,6 +19,7 @@ from karaoke_he.mux import mux_video
 from karaoke_he.separation import separate_audio_remote
 from karaoke_he.subtitle_render import burn_overlay, render_overlay_video
 from karaoke_he.text_utils import normalize_hebrew
+from karaoke_he.web.library import write_job_record
 from karaoke_he.youtube import download_youtube_audio
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -177,7 +178,7 @@ def _stems_are_stale(stems_dir: Path, input_hash: str) -> bool:
     return not stamp.is_file() or stamp.read_text().strip() != input_hash
 
 
-def _make_browser_preview(video_path: Path, instrumental_path: Path, output_path: Path) -> Path:
+def make_browser_preview(video_path: Path, instrumental_path: Path, output_path: Path) -> Path:
     """Muxes the (already h264) karaoke video with the instrumental as AAC into a fast-start .mp4
     that browsers can play inline. The video stream is copied, not re-encoded, so this is quick."""
     cmd = [
@@ -349,8 +350,16 @@ def run_pipeline(
         language=lang_config.bcp47,
     )
 
-    preview_path = _make_browser_preview(
+    preview_path = make_browser_preview(
         composited_path, separation.instrumental_path, work_dir / "mux" / f"{song_slug}_preview.mp4"
+    )
+
+    write_job_record(
+        work_dir,
+        artist=artist,
+        title=title,
+        language=language,
+        source=youtube_url or (Path(input_audio).name if input_audio else None),
     )
 
     on_progress("done", None)

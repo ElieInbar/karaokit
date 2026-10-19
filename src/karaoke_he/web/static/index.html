@@ -443,6 +443,59 @@
   }
 
   .warnings ul { margin: 6px 0 0; padding-left: 20px; }
+
+  /* --- "Your videos" library --- */
+
+  .library { margin-top: 40px; }
+
+  .library h2 {
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 4px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--rule);
+  }
+
+  .library-empty { color: var(--ink-soft); font-size: 0.9rem; padding: 14px 0; }
+
+  .track { border-bottom: 1px solid var(--hairline); padding: 12px 0; }
+
+  .track-row { display: flex; align-items: center; gap: 14px; }
+
+  .track-num {
+    flex: none;
+    width: 26px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 1.05rem;
+  }
+
+  .track-info { flex: 1; min-width: 0; }
+  .track-title { text-align: left; font-weight: 700; font-size: 0.98rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track-meta { color: var(--ink-soft); font-size: 0.8rem; margin-top: 2px; }
+
+  .track-actions { display: flex; gap: 8px; flex: none; }
+  a.btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    color: var(--ink);
+    border: 1.5px solid var(--rule);
+    border-radius: 999px;
+    padding: 7px 16px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-decoration: none;
+  }
+  a.btn-secondary:hover { background: var(--hairline); }
+  .track video { margin-top: 12px; }
+
+  @media (max-width: 520px) {
+    .track-row { flex-wrap: wrap; }
+    .track-actions { width: 100%; padding-left: 40px; }
+  }
   .warnings li { margin-bottom: 4px; }
 </style>
 </head>
@@ -539,6 +592,11 @@
     <div class="progress-track"><div class="progress-fill" style="width: 0%"></div></div>
     <div class="result"></div>
   </div>
+
+  <section class="library" aria-labelledby="library-heading">
+    <h2 id="library-heading">Your videos</h2>
+    <div id="library-list"><p class="library-empty">Loading…</p></div>
+  </section>
 </div>
 
 <script>
@@ -990,6 +1048,7 @@ form.addEventListener("submit", async (e) => {
           `<ul>${job.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div>`;
       }
       resultDiv.innerHTML = html;
+      loadLibrary();
       setBusy(button, false);
       return;
     }
@@ -997,6 +1056,71 @@ form.addEventListener("submit", async (e) => {
     setProgress(job.status, job.detail);
   }, 2000);
 });
+
+// --- "Your videos": every finished video under work/, newest first ---
+
+const LANGUAGE_NAMES = Object.fromEntries([...languageSelect.options].map(o => [o.value, o.textContent]));
+const libraryList = document.getElementById("library-list");
+
+function formatDate(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+async function loadLibrary() {
+  let entries;
+  try {
+    const res = await fetch("/api/library");
+    if (!res.ok) throw new Error(await errorMessage(res));
+    entries = await res.json();
+  } catch (err) {
+    libraryList.innerHTML = `<p class="library-empty">Couldn't load your videos: ${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  if (!entries.length) {
+    libraryList.innerHTML = '<p class="library-empty">Your finished karaoke videos will show up here.</p>';
+    return;
+  }
+  libraryList.innerHTML = entries.map((e, i) => {
+    const slug = encodeURIComponent(e.slug);
+    // <bdi> keeps an RTL artist name from flipping the order of the whole line.
+    const meta = [e.artist, LANGUAGE_NAMES[e.language], formatDate(e.created_at), `${Math.round(e.size_bytes / 1e6)} MB`]
+      .filter(Boolean).map(v => `<bdi>${escapeHtml(v)}</bdi>`).join(" · ");
+    return `<div class="track">
+      <div class="track-row">
+        <div class="track-num">${String(i + 1).padStart(2, "0")}</div>
+        <div class="track-info">
+          <div class="track-title" dir="auto">${escapeHtml(e.title)}</div>
+          <div class="track-meta">${meta}</div>
+        </div>
+        <div class="track-actions">
+          <button type="button" class="secondary" data-play="${slug}">Play</button>
+          <a class="btn-secondary" href="/library/${slug}/video" download>Download</a>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+libraryList.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-play]");
+  if (!btn) return;
+  const track = btn.closest(".track");
+  const existing = track.querySelector("video");
+  if (existing) {
+    existing.remove();
+    btn.textContent = "Play";
+    return;
+  }
+  const video = document.createElement("video");
+  video.controls = true;
+  video.autoplay = true;
+  video.src = `/library/${btn.dataset.play}/preview`;
+  track.appendChild(video);
+  btn.textContent = "Close";
+});
+
+loadLibrary();
 </script>
 </body>
 </html>

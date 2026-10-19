@@ -9,6 +9,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from karaoke_he.language_detect import detect_language
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import fetch_from_lrclib, search_suggestions
+from karaoke_he.web.library import find_entry_video, list_library, resolve_song_dir
+from karaoke_he.web.pipeline import PROJECT_ROOT, make_browser_preview
 from karaoke_he.web.jobs import JobConflictError, create_job, get_job
 from karaoke_he.youtube import (
     YouTubeError,
@@ -202,3 +204,48 @@ def job_video(job_id: str) -> FileResponse:
     if job is None or job.output_path is None:
         raise HTTPException(404, "Video not ready")
     return FileResponse(job.output_path, filename=job.output_path.name)
+
+
+WORK_ROOT = PROJECT_ROOT / "work"
+SONGS_ROOT = PROJECT_ROOT / "songs"
+
+
+@app.get("/api/library")
+def library_endpoint() -> list[dict]:
+    """Every finished video under work/, newest first - backs the "Your videos" list."""
+    return [
+        {
+            "slug": e.slug,
+            "artist": e.artist,
+            "title": e.title,
+            "language": e.language,
+            "created_at": e.created_at,
+            "size_bytes": e.size_bytes,
+        }
+        for e in list_library(WORK_ROOT, SONGS_ROOT)
+    ]
+
+
+@app.get("/library/{slug}/video")
+def library_video(slug: str) -> FileResponse:
+    video = find_entry_video(WORK_ROOT, slug)
+    if video is None:
+        raise HTTPException(404, "Video not found")
+    return FileResponse(video, filename=video.name)
+
+
+@app.get("/library/{slug}/preview")
+def library_preview(slug: str) -> FileResponse:
+    """Browser-playable .mp4 of a library video. Built on first request for videos made before
+    previews existed (it only copies the video stream, so it takes about a second)."""
+    song_dir = resolve_song_dir(WORK_ROOT, slug)
+    if song_dir is None or find_entry_video(WORK_ROOT, slug) is None:
+        raise HTTPException(404, "Video not found")
+    preview = song_dir / "mux" / f"{song_dir.name}_preview.mp4"
+    if not preview.is_file():
+        composited = song_dir / "subtitles" / "background_with_subs.mp4"
+        instrumental = song_dir / "stems" / "instrumental.wav"
+        if not (composited.is_file() and instrumental.is_file()):
+            raise HTTPException(404, "No preview available for this video")
+        make_browser_preview(composited, instrumental, preview)
+    return FileResponse(preview, media_type="video/mp4")
