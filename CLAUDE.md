@@ -401,24 +401,31 @@ monthly credit - hit and resolved once during this work.
 
 ## Performance (end-to-end time and file sizes)
 
-Measured on a 3:55 song, fresh separation: **432s -> 85s** end to end; the `.mkv` **116 MB -> 18 MB**.
+Measured on a 3:55 song, fresh separation: **432s -> ~60s with a warm Modal container, ~80s
+cold**; the `.mkv` **116 MB -> 18 MB**.
 
 | Step | Before | After | What changed |
 |---|---|---|---|
-| Separation (Modal) | 193s | ~40s | H100 instead of A10G (~3x faster, about the same cost per song at per-second billing), and `separation.REMOTE_OVERLAP = 2` (model default ~4; compute is proportional to it; vocals within 28.5 dB SNR of the default's). Of the 40s, ~10s is container cold start and ~8s is moving WAVs. |
-| Alignment | 17s | ~13-17s | MMS model cached per process (`alignment._cached_alignment_model`, ~3s per job after the first). The rest is the acoustic model on MPS. |
-| Karaoke rendering + burn-in | 215s | ~27s | `subtitle_render.render_karaoke_video`: one ffmpeg pass, only the bottom `BAND_HEIGHT` px rendered, each distinct frame state drawn once (~385 of ~5900 frames). Remaining time is ffmpeg decoding the background + libx264 encoding 1080p, not Python. Apple's hardware encoder was no faster here and made 2x bigger files. |
+| Separation (Modal) | 193s | ~28s warm / ~48s cold | H100 instead of A10G (~3x faster, about the same cost per song at per-second billing), and `separation.REMOTE_OVERLAP = 2` (model default ~4; compute is proportional to it; vocals within 28.5 dB SNR of the default's). Cold start is ~20s. |
+| Alignment | 17s | ~1s | The acoustic model (the only expensive part) runs on the Modal GPU right after separation (`separate_remote(..., with_alignment_emissions=True)`); its output (`alignment.AcousticEmissions`, ~1 MB) is saved as `stems/alignment_emissions.npz` and `align_lyrics(..., emissions=...)` does the text-dependent rest locally in milliseconds - verified to give identical word timings. Stems cached from before this get their emissions computed locally once (MMS model cached per process) and saved. |
+| Karaoke rendering + burn-in | 215s | ~25-30s | `subtitle_render.render_karaoke_video`: one ffmpeg pass, only the bottom `BAND_HEIGHT` px rendered, each distinct frame state drawn once (~385 of ~5900 frames, 0.6s of Python), band converted to yuva420p before overlaying (~4.5s faster than `format=auto`). What's left is ffmpeg: ~18s libx264 encoding + ~7s overlay at 1080p. |
 | Audio in the `.mkv` | PCM WAV | AAC | `mux.encode_aac`: 192k instrumental, 128k vocals; the browser preview copies the AAC. |
 
 The vinyl background is built during separation and the AAC encodes during rendering
 (`run_pipeline`'s thread pool). Intermediates nobody reads afterwards (`background.mp4`, the old
 `overlay.mov`) are deleted. Benchmarks were run with ad-hoc scripts that wrap each pipeline
-function with a timer; the numbers above are the ones to beat.
+function with a timer.
 
-Not done yet, in order of expected gain: run the alignment's acoustic model on the Modal GPU
-right after separation (~12s), render the karaoke video in parallel time segments (~10s), keep a
-warm Modal container for a few minutes after a job (~10s cold start, costs idle GPU time),
-return FLAC instead of WAV from Modal (~4s).
+Tried and rejected (measured, no gain): Apple's `h264_videotoolbox` encoder (same speed here,
+2x bigger files, slower still with hardware *decoding*); rendering the video as 2-4 time
+segments in parallel ffmpeg processes and joining them (one libx264 process already saturates
+this 8-core Mac - 34s / 36s / 38s / 42s for 1-4 segments); x264 `superfast`/`ultrafast` (3-10x
+bigger files for a few seconds).
+
+Remaining levers: keep the Modal container warm for a few minutes after a job (`scaledown_window`
+- removes the ~20s cold start, but bills idle H100 time); render at 720p instead of 1080p (would
+roughly halve the ~28s rendering; a visible quality trade-off); return FLAC instead of WAV from
+Modal (~4s).
 
 ## Why `legacy/align.py` isn't used as a reference
 

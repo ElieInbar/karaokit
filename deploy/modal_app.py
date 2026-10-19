@@ -25,7 +25,7 @@ from queue import Queue
 
 import modal
 
-from karaoke_he.separation import DEFAULT_MODEL, separate_audio
+from karaoke_he.separation import ALIGNMENT_EMISSIONS_NAME, DEFAULT_MODEL, separate_audio
 
 app = modal.App("karaoke-he-separation")
 
@@ -34,9 +34,15 @@ model_cache_volume = modal.Volume.from_name("karaoke-he-model-cache", create_if_
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("ffmpeg")
-    .pip_install("audio-separator[gpu]", "audioread")
-    .env({"AUDIO_SEPARATOR_MODEL_DIR": MODEL_CACHE_DIR})
+    .apt_install("ffmpeg", "git")
+    .pip_install(
+        "audio-separator[gpu]",
+        "audioread",
+        # For the alignment's acoustic model, run right after separation (see separate_remote).
+        "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git",
+    )
+    # Both model caches live on the same persistent volume, so neither is re-downloaded per run.
+    .env({"AUDIO_SEPARATOR_MODEL_DIR": MODEL_CACHE_DIR, "HF_HOME": f"{MODEL_CACHE_DIR}/huggingface"})
     .add_local_python_source("karaoke_he")
 )
 
@@ -81,7 +87,11 @@ class _ProgressCapture:
     timeout=600,
 )
 def separate_remote(
-    audio_bytes: bytes, filename: str, model_name: str = DEFAULT_MODEL, overlap: int | None = None
+    audio_bytes: bytes,
+    filename: str,
+    model_name: str = DEFAULT_MODEL,
+    overlap: int | None = None,
+    with_alignment_emissions: bool = False,
 ) -> Iterator[str | dict[str, bytes]]:
     """A generator function (called via `.remote_gen(...)`) so progress can stream back to the
     caller: yields `"NN%"` strings as separation progresses, then a final `{"vocals.wav": ...,
@@ -112,6 +122,16 @@ def separate_remote(
                     "vocals.wav": result.vocals_path.read_bytes(),
                     "instrumental.wav": result.instrumental_path.read_bytes(),
                 }
+                if with_alignment_emissions:
+                    # The alignment's only expensive step (its acoustic model over the vocals)
+                    # takes ~12s on the Mac's MPS but ~1-2s here, and the vocals are already on
+                    # this GPU box - so it runs here and only the small result (~1 MB) travels.
+                    from karaoke_he.alignment import compute_emissions
+
+                    emissions_path = tmp_dir / ALIGNMENT_EMISSIONS_NAME
+                    compute_emissions(result.vocals_path).save(emissions_path)
+                    model_cache_volume.commit()
+                    outcome["stems"][ALIGNMENT_EMISSIONS_NAME] = emissions_path.read_bytes()
         except Exception as exc:  # noqa: BLE001 - re-raised in the main thread below
             outcome["error"] = exc
         finally:

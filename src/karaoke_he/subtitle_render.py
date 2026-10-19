@@ -200,7 +200,11 @@ def _render_karaoke_video(
         "-video_size", f"{band_size[0]}x{band_size[1]}",
         "-framerate", str(fps),
         "-i", "-",
-        "-filter_complex", f"[0:v][1:v]overlay=0:{band_y}:shortest=1:format=auto,format=yuv420p[v]",
+        # Converting the small RGBA band to yuva420p first and overlaying in yuv420 keeps the
+        # (big) background in its native format; letting ffmpeg pick (format=auto, then
+        # converting) measured ~4.5s slower on a 4-minute song for the same output.
+        "-filter_complex",
+        f"[1:v]format=yuva420p[band];[0:v][band]overlay=0:{band_y}:shortest=1:format=yuv420[v]",
         "-map", "[v]",
         *encoder_args,
         str(output_path),

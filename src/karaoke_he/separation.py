@@ -12,6 +12,10 @@ DEFAULT_MODEL = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
 # at 2, with the separated vocals within 28.5 dB SNR of the default's (a difference judged
 # inaudible for a karaoke instrumental). The local `separate_audio` keeps the model default.
 REMOTE_OVERLAP = 2
+
+# Written next to the stems when the remote separation also computed the alignment's acoustic
+# model output (`alignment.AcousticEmissions`); it belongs to these exact stems.
+ALIGNMENT_EMISSIONS_NAME = "alignment_emissions.npz"
 DURATION_TOLERANCE_SEC = 1.0
 
 
@@ -100,6 +104,7 @@ def separate_audio_remote(
     app_name: str = "karaoke-he-separation",
     function_name: str = "separate_remote",
     overlap: int | None = REMOTE_OVERLAP,
+    with_alignment_emissions: bool = False,
     on_progress: Callable[[str], None] = lambda message: None,
 ) -> SeparationResult:
     """Same contract as `separate_audio`, but runs on the Modal-deployed GPU function
@@ -130,7 +135,15 @@ def separate_audio_remote(
 
     separate_remote_fn = modal.Function.from_name(app_name, function_name)
     stems: dict[str, bytes] | None = None
-    for item in separate_remote_fn.remote_gen(input_audio.read_bytes(), input_audio.name, model_name, overlap=overlap):
+    stale_emissions = output_dir / ALIGNMENT_EMISSIONS_NAME
+    stale_emissions.unlink(missing_ok=True)  # about to be replaced (or not produced) along with the stems
+    for item in separate_remote_fn.remote_gen(
+        input_audio.read_bytes(),
+        input_audio.name,
+        model_name,
+        overlap=overlap,
+        with_alignment_emissions=with_alignment_emissions,
+    ):
         if isinstance(item, dict):
             stems = item
         else:
@@ -141,6 +154,8 @@ def separate_audio_remote(
 
     vocals_path.write_bytes(stems["vocals.wav"])
     instrumental_path.write_bytes(stems["instrumental.wav"])
+    if ALIGNMENT_EMISSIONS_NAME in stems:
+        (output_dir / ALIGNMENT_EMISSIONS_NAME).write_bytes(stems[ALIGNMENT_EMISSIONS_NAME])
 
     _validate_stem_durations(vocals_path, instrumental_path, source_duration, model_name)
     return SeparationResult(vocals_path, instrumental_path, model_name, source_duration)

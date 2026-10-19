@@ -18,6 +18,7 @@ from ctc_forced_aligner import (
 )
 
 DEFAULT_LANGUAGE = "heb"
+ALIGNMENT_MODEL_PATH = "MahmoudAshraf/mms-300m-1130-forced-aligner"
 
 
 ## `score` is a log-probability (0 = perfectly confident, more negative = less so), not a 0-1
@@ -250,8 +251,79 @@ def _cached_alignment_model(device: str, dtype: torch.dtype) -> tuple:
     with _model_cache_lock:
         key = (device, dtype)
         if key not in _model_cache:
-            _model_cache[key] = load_alignment_model(device, dtype=dtype)
+            _model_cache[key] = load_alignment_model(device, model_path=ALIGNMENT_MODEL_PATH, dtype=dtype)
         return _model_cache[key]
+
+
+_tokenizer = None
+
+
+def _cached_tokenizer():
+    """Only the tokenizer (a small vocabulary file) - all that's needed to align against
+    emissions computed elsewhere, without loading the 300M-parameter model."""
+    global _tokenizer
+    with _model_cache_lock:
+        if _tokenizer is None:
+            from transformers import AutoTokenizer
+
+            _tokenizer = AutoTokenizer.from_pretrained(ALIGNMENT_MODEL_PATH, word_delimiter_token=None)
+        return _tokenizer
+
+
+@dataclass
+class AcousticEmissions:
+    """The alignment's acoustic-model output for one vocals track: per-frame log-probabilities
+    over the model's characters (plus the <star> column). This is the only expensive part of
+    forced alignment (~12s for a 4-minute song on this Mac's MPS, ~1-2s on a CUDA GPU) and it
+    doesn't depend on the lyrics text, so it can be computed remotely right after separation
+    (see `deploy/modal_app.py`) and cached next to the stems; the text-dependent rest of
+    `align_lyrics` takes milliseconds."""
+
+    emissions: np.ndarray  # float32, [frames, vocab + 1]
+    stride: float  # milliseconds per frame
+
+    def save(self, path: Path) -> None:
+        with open(path, "wb") as f:
+            np.savez_compressed(f, emissions=self.emissions, stride=np.float64(self.stride))
+
+    @classmethod
+    def load(cls, path: Path) -> "AcousticEmissions":
+        with np.load(path) as data:
+            return cls(emissions=data["emissions"].astype(np.float32), stride=float(data["stride"]))
+
+
+def _pick_device(force_cpu: bool) -> str:
+    if force_cpu:
+        return "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def compute_emissions(
+    vocals_path: Path,
+    *,
+    force_cpu: bool = False,
+    batch_size: int = 4,
+    on_progress: Callable[[str], None] = lambda message: None,
+) -> AcousticEmissions:
+    vocals_path = Path(vocals_path)
+    if not vocals_path.is_file():
+        raise FileNotFoundError(f"Vocals audio not found: {vocals_path}")
+    device = _pick_device(force_cpu)
+    dtype = torch.float16 if device == "cuda" else torch.float32
+
+    on_progress("loading alignment model")
+    model, _ = _cached_alignment_model(device, dtype)
+
+    on_progress("loading vocals audio")
+    audio_waveform = load_audio(str(vocals_path), model.dtype, model.device)
+
+    on_progress("running acoustic model")
+    emissions, stride = generate_emissions(model, audio_waveform, batch_size=batch_size)
+    return AcousticEmissions(emissions=emissions.float().cpu().numpy(), stride=float(stride))
 
 
 def _validate_alignment(words: list[WordTimestamp], expected_word_count: int) -> None:
@@ -283,41 +355,29 @@ def align_lyrics(
     force_cpu: bool = False,
     batch_size: int = 4,
     on_progress: Callable[[str], None] = lambda message: None,
+    emissions: AcousticEmissions | None = None,
 ) -> list[WordTimestamp]:
+    """Forced-aligns `lyrics_text` to the vocals. `emissions`, if given, must have been computed
+    from this same vocals file (`compute_emissions`); the acoustic model is then skipped."""
     vocals_path = Path(vocals_path)
-    if not vocals_path.is_file():
+    if emissions is None and not vocals_path.is_file():
         raise FileNotFoundError(f"Vocals audio not found: {vocals_path}")
 
     text = " ".join(lyrics_text.split())
     if not text:
         raise AlignmentError("Lyrics text is empty, nothing to align.")
 
-    if force_cpu:
-        device = "cpu"
-    elif torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    else:
-        device = "cpu"
-    dtype = torch.float16 if device == "cuda" else torch.float32
-
-    on_progress("loading alignment model")
-    model, tokenizer = _cached_alignment_model(device, dtype)
-
-    on_progress("loading vocals audio")
-    audio_waveform = load_audio(str(vocals_path), model.dtype, model.device)
-
-    on_progress("running acoustic model")
-    emissions, stride = generate_emissions(model, audio_waveform, batch_size=batch_size)
+    if emissions is None:
+        emissions = compute_emissions(vocals_path, force_cpu=force_cpu, batch_size=batch_size, on_progress=on_progress)
+    tokenizer = _cached_tokenizer()
 
     on_progress("preparing text")
     tokens_starred, text_starred = preprocess_text(text, romanize=True, language=language)
 
     on_progress("computing alignment")
-    segments, scores, blank_token = get_alignments(emissions, tokens_starred, tokenizer)
+    segments, scores, blank_token = get_alignments(torch.from_numpy(emissions.emissions), tokens_starred, tokenizer)
     spans = get_spans(tokens_starred, segments, blank_token)
-    raw_words = postprocess_results(text_starred, spans, stride, scores)
+    raw_words = postprocess_results(text_starred, spans, emissions.stride, scores)
 
     words = [
         WordTimestamp(word=w["text"], start=w["start"], end=w["end"], score=w["score"]) for w in raw_words

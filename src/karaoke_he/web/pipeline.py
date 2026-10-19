@@ -8,8 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from karaoke_he.alignment import (
+    AcousticEmissions,
     WordTimestamp,
     align_lyrics,
+    compute_emissions,
     find_parenthetical_word_indices,
     load_diagnostic_model,
     summarize_low_confidence_regions,
@@ -20,7 +22,7 @@ from karaoke_he.background import render_vinyl_background
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import LyricsNotFoundError, load_manual_fallback, resolve_lyrics
 from karaoke_he.mux import encode_aac, mux_video
-from karaoke_he.separation import separate_audio_remote
+from karaoke_he.separation import ALIGNMENT_EMISSIONS_NAME, separate_audio_remote
 from karaoke_he.subtitle_render import render_karaoke_video
 from karaoke_he.text_utils import normalize_hebrew
 from karaoke_he.web.library import write_job_record
@@ -153,6 +155,23 @@ def _stems_are_stale(stems_dir: Path, input_hash: str) -> bool:
     return not stamp.is_file() or stamp.read_text().strip() != input_hash
 
 
+def _load_or_compute_emissions(
+    emissions_path: Path, vocals_path: Path, *, on_progress: Callable[[str], None]
+) -> AcousticEmissions:
+    """The alignment's acoustic-model output for these stems: normally computed on the Modal GPU
+    right after separation and saved next to the stems (`separation.ALIGNMENT_EMISSIONS_NAME`);
+    otherwise (stems cached from before that existed) computed locally once and saved there, so
+    a re-run of the same song skips it either way."""
+    if emissions_path.is_file():
+        try:
+            return AcousticEmissions.load(emissions_path)
+        except (OSError, ValueError, KeyError):
+            pass  # unreadable/partial file - recompute below
+    emissions = compute_emissions(vocals_path, on_progress=on_progress)
+    emissions.save(emissions_path)
+    return emissions
+
+
 def make_browser_preview(video_path: Path, instrumental_path: Path, output_path: Path) -> Path:
     """Muxes the (already h264) karaoke video with the instrumental into a fast-start .mp4 that
     browsers can play inline. The video stream is copied, not re-encoded, so this is quick; the
@@ -278,6 +297,7 @@ def run_pipeline(
         local_input,
         stems_dir,
         overwrite=_stems_are_stale(stems_dir, input_hash),
+        with_alignment_emissions=True,
         on_progress=lambda msg: on_progress("separating", msg),
     )
     (stems_dir / STEMS_SOURCE_STAMP).write_text(input_hash)
@@ -301,10 +321,16 @@ def run_pipeline(
     lyrics_lines = [line for line in lyrics_text.splitlines() if line.strip()]
 
     on_progress("aligning", None)
+    emissions = _load_or_compute_emissions(
+        stems_dir / ALIGNMENT_EMISSIONS_NAME,
+        separation.vocals_path,
+        on_progress=lambda msg: on_progress("aligning", msg),
+    )
     words = align_lyrics(
         separation.vocals_path,
         lyrics_text,
         language=lang_config.iso639_3,
+        emissions=emissions,
         on_progress=lambda msg: on_progress("aligning", msg),
     )
     words = try_correct_alignment(
