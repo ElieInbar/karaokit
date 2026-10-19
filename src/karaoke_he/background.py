@@ -16,7 +16,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from karaoke_he.languages import DEFAULT_LANGUAGE
-from karaoke_he.subtitle_render import CANVAS_SIZE, FONT_PATH, _to_display_text, scaled
+from karaoke_he.fonts import font_for_text
+from karaoke_he.subtitle_render import CANVAS_SIZE, _to_display_text, scaled
 
 BG_COLOR = (29, 25, 21)  # web app's dark "paper"
 TITLE_COLOR = (243, 236, 224)
@@ -48,10 +49,10 @@ def _fit_font(text: str, max_width: int) -> tuple[ImageFont.FreeTypeFont, str]:
     """Largest title font that fits `max_width`; below the minimum size, the text is truncated
     with an ellipsis instead of shrinking further."""
     for size in range(TITLE_MAX_SIZE, TITLE_MIN_SIZE - 1, -2):
-        font = ImageFont.truetype(FONT_PATH, size)
+        font = font_for_text(text, size)
         if font.getlength(text) <= max_width:
             return font, text
-    font = ImageFont.truetype(FONT_PATH, TITLE_MIN_SIZE)
+    font = font_for_text(text, TITLE_MIN_SIZE)
     while text and font.getlength(text + "…") > max_width:
         text = text[:-1]
     return font, text.rstrip() + "…"
@@ -64,7 +65,7 @@ def _draw_scene(title: str, artist: str | None, language: str) -> Image.Image:
     title_font, title_text = _fit_font(title.strip(), TITLE_MAX_WIDTH)
     draw.text((TEXT_LEFT, TITLE_TOP), _to_display_text(title_text, language), font=title_font, fill=TITLE_COLOR)
     if artist:
-        artist_font = ImageFont.truetype(FONT_PATH, ARTIST_SIZE)
+        artist_font = font_for_text(artist, ARTIST_SIZE, weight="Regular")
         artist_text = artist.strip().upper()
         while artist_text and artist_font.getlength(artist_text) > TITLE_MAX_WIDTH:
             artist_text = artist_text[:-1]

@@ -1,0 +1,14 @@
+services:
+  karaokit:
+    build: .
+    image: karaokit
+    ports:
+      - "127.0.0.1:8000:8000"   # only reachable from this computer
+    env_file:   # settings and Modal credentials (MODAL_TOKEN_ID / MODAL_TOKEN_SECRET), see .env.example
+      - path: .env
+        required: false
+    volumes:
+      - karaokit-data:/data      # finished videos, working files, downloaded models
+
+volumes:
+  karaokit-data:

@@ -10,7 +10,8 @@ from karaoke_he.language_detect import detect_language
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import fetch_from_lrclib, search_songs
 from karaoke_he.web.library import find_entry_video, list_library, resolve_song_dir
-from karaoke_he.web.pipeline import PROJECT_ROOT, make_browser_preview
+from karaoke_he import config
+from karaoke_he.web.pipeline import make_browser_preview
 from karaoke_he.web.jobs import JobConflictError, cancel_job, create_job, get_job
 from karaoke_he.youtube import (
     YouTubeError,
@@ -39,6 +40,23 @@ def index() -> str:
 
 
 LRCLIB_UNAVAILABLE_MESSAGE = "LRCLIB seems to be temporarily unavailable — try again in a moment."
+
+
+YOUTUBE_DISABLED_MESSAGE = (
+    "YouTube import is turned off on this installation (set KARAOKIT_ENABLE_YOUTUBE=1 to enable it). "
+    "Upload an audio file instead."
+)
+
+
+def _require_youtube() -> None:
+    if not config.youtube_enabled():
+        raise HTTPException(403, YOUTUBE_DISABLED_MESSAGE)
+
+
+@app.get("/api/config")
+def config_endpoint() -> dict:
+    """What this installation supports, so the page only offers what will work."""
+    return {"youtube_enabled": config.youtube_enabled(), "separation": config.separation_backend()}
 
 
 @app.get("/api/search")
@@ -92,7 +110,7 @@ def lyrics_check_endpoint(
     from "paste the lyrics manually" - letting this propagate as an unhandled 500 previously made
     a temporary LRCLIB blip look like the whole app had crashed.
     """
-    if youtube_url and is_youtube_url(youtube_url):
+    if youtube_url and config.youtube_enabled() and is_youtube_url(youtube_url):
         try:
             metadata = fetch_youtube_metadata(youtube_url)
         except YouTubeError:
@@ -128,6 +146,7 @@ def youtube_metadata_endpoint(url: str) -> dict:
     """Fetches video title/uploader/duration (no download) so the frontend can prefill the
     artist/title fields for the user to confirm - reusing the existing lyrics-check/review gate
     unchanged, rather than trying to guess the "right" artist/title automatically."""
+    _require_youtube()
     if not is_youtube_url(url):
         raise HTTPException(400, "Not a YouTube URL")
     try:
@@ -159,6 +178,8 @@ async def create_job_endpoint(
         raise HTTPException(400, f"Unknown language code {language!r}; expected one of {sorted(LANGUAGES)}")
     if bool(file) == bool(youtube_url):
         raise HTTPException(400, "Provide exactly one of an uploaded file or a youtube_url")
+    if youtube_url:
+        _require_youtube()
     if youtube_url and not is_youtube_url(youtube_url):
         raise HTTPException(400, "Not a YouTube URL")
 
@@ -230,8 +251,8 @@ def job_video(job_id: str) -> FileResponse:
     return FileResponse(job.output_path, filename=job.output_path.name)
 
 
-WORK_ROOT = PROJECT_ROOT / "work"
-SONGS_ROOT = PROJECT_ROOT / "songs"
+WORK_ROOT = config.WORK_DIR
+SONGS_ROOT = config.SONGS_DIR
 
 
 @app.get("/api/library")

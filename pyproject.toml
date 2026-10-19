@@ -3,21 +3,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "karaoke-he"
+name = "karaokit"
 version = "0.1.0"
-description = "Pipeline de generation de videos karaoke pour des chansons en hebreu"
+description = "Turn any song into a karaoke video with a word-by-word highlight (Hebrew, Arabic, English, French, Spanish, Russian)."
 requires-python = ">=3.12"
 dependencies = [
     "torch",
     "torchaudio",
-    "whisperx",
     "stable-ts",
-    "pyannote.audio",
-    "audio-separator",
+    "audio-separator[cpu]",
     "audioread",
     "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git",
     "pymkv2",
-    "mutagen",
     "requests",
     "typer",
     "pillow",
@@ -28,11 +25,14 @@ dependencies = [
     "python-multipart",
     "yt-dlp",
     "fast-langdetect",
+    "modal",
 ]
 
 [project.optional-dependencies]
-deploy = ["modal"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+karaoke_he = ["assets/fonts/*.ttf", "assets/fonts/*.txt", "web/static/*"]

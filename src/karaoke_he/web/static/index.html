@@ -306,6 +306,8 @@
   .song-card-title { font-weight: 700; font-size: 1.05rem; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .song-card-meta { color: var(--ink-soft); font-size: 0.82rem; margin-top: 2px; }
 
+  .local-note { font-size: 0.8rem; color: var(--ink-soft); margin: 8px 0 0; }
+
   .link-btn {
     width: auto; margin: 8px 0 0; padding: 0; background: none; color: var(--ink-soft);
     font-size: 0.82rem; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; border-radius: 0;
@@ -543,10 +545,11 @@
   <form id="job-form">
     <div class="field">
       <span class="section-label">Audio source</span>
-      <div class="source-toggle">
+      <div class="source-toggle" id="source-toggle">
         <label><input type="radio" name="source-mode" value="file" id="source-file" checked>Upload a file</label>
-        <label><input type="radio" name="source-mode" value="youtube" id="source-youtube">YouTube link</label>
+        <label id="youtube-choice"><input type="radio" name="source-mode" value="youtube" id="source-youtube">YouTube link</label>
       </div>
+      <p class="hint local-note" id="local-note" hidden>Separation runs on this computer (no GPU account configured): expect 20–30 minutes per song.</p>
     </div>
 
     <div class="field" id="file-source-field">
@@ -1437,6 +1440,21 @@ libraryList.addEventListener("click", (e) => {
 });
 
 loadLibrary();
+
+// Only offer what this installation supports (see config.py / .env).
+(async () => {
+  try {
+    const res = await fetch("/api/config");
+    if (!res.ok) return;
+    const cfg = await res.json();
+    if (!cfg.youtube_enabled) {
+      document.getElementById("youtube-choice").hidden = true;
+      document.getElementById("source-file").checked = true;
+      applySourceMode();
+    }
+    document.getElementById("local-note").hidden = cfg.separation !== "local";
+  } catch {}
+})();
 
 // Pick a running job back up after a reload.
 (async () => {

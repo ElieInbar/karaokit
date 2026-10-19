@@ -7,13 +7,13 @@ from bidi.algorithm import get_display
 from PIL import Image, ImageDraw, ImageFont
 
 from karaoke_he.alignment import WordTimestamp
+from karaoke_he.fonts import font_for_language
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.subtitles import SubtitleLine, _line_display_start, group_words_by_line
 from karaoke_he.text_utils import strip_display_punctuation
 
 # Covers Latin + Hebrew + Arabic + Cyrillic (and more) in one file, so every currently supported
 # language renders correctly without a per-language font map.
-FONT_PATH = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"
 # Output resolution. 720p rather than 1080p: rendering + encoding time scales with pixel count,
 # and at 1080p it was the biggest remaining share of a job (~28s of ~60s for a 4-minute song).
 # Every size below was designed on a 1080-line canvas and is scaled from there with `scaled()`,
@@ -40,7 +40,6 @@ OUTLINE_WIDTH = max(2, scaled(3))
 # frame was individually correct; a short crossfade is a real animation instead of a jump-cut.
 TRANSITION_SEC = 0.15
 
-_font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
 
 
 def _lerp_color(a: tuple[int, int, int, int], b: tuple[int, int, int, int], t: float) -> tuple[int, int, int, int]:
@@ -48,14 +47,14 @@ def _lerp_color(a: tuple[int, int, int, int], b: tuple[int, int, int, int], t: f
     return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(4))
 
 
-def _draw_chunk(draw: ImageDraw.ImageDraw, x: float, y: float, text: str, color) -> float:
+def _draw_chunk(draw: ImageDraw.ImageDraw, x: float, y: float, text: str, color, font: ImageFont.FreeTypeFont) -> float:
     """Draws one already-bidi-ordered chunk of text and returns its rendered width."""
     if not text:
         return 0.0
     draw.text(
-        (x, y), text, font=_font, fill=color, stroke_width=OUTLINE_WIDTH, stroke_fill=OUTLINE_COLOR
+        (x, y), text, font=font, fill=color, stroke_width=OUTLINE_WIDTH, stroke_fill=OUTLINE_COLOR
     )
-    return draw.textlength(text, font=_font)
+    return draw.textlength(text, font=font)
 
 
 def _to_display_text(raw_text: str, language: str) -> str:
@@ -105,7 +104,8 @@ def render_line_frame(
         _lerp_color(BASE_COLOR, HIGHLIGHT_COLOR, (t - active.start) / TRANSITION_SEC) if active else BASE_COLOR
     )
 
-    space_width = draw.textlength(" ", font=_font)
+    font = font_for_language(language, FONT_SIZE)
+    space_width = draw.textlength(" ", font=font)
     # Chunks are drawn left-to-right in list order (the draw loop below accumulates x left to
     # right). RTL reading starts on the right, so the sung chunk - nearest the reading start -
     # must be drawn LAST (rightmost); LTR reading starts on the left, so sung must be drawn
@@ -117,13 +117,13 @@ def render_line_frame(
     )
     chunks = [c for c in ordered if c[0]]
 
-    widths = [draw.textlength(text, font=_font) for text, _ in chunks]
+    widths = [draw.textlength(text, font=font) for text, _ in chunks]
     total_width = sum(widths) + space_width * max(0, len(chunks) - 1)
 
     x = (canvas_size[0] - total_width) / 2
     y = canvas_size[1] - MARGIN_BOTTOM - FONT_SIZE
     for text, color in chunks:
-        x += _draw_chunk(draw, x, y, text, color) + space_width
+        x += _draw_chunk(draw, x, y, text, color, font) + space_width
 
     return img
 

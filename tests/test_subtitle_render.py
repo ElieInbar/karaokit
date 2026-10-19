@@ -121,3 +121,14 @@ def test_render_karaoke_video_burns_lyrics_onto_background_in_one_pass(tmp_path)
     w, h = CANVAS_SIZE
     band = Image.open(frame).convert("RGB").crop((0, h - BAND_HEIGHT, w, h))
     assert len(set(band.getdata())) > 10
+
+
+def test_fonts_use_the_basic_layout_engine_so_bidi_is_applied_once():
+    # Text is bidi-reordered by our own code; a raqm-enabled Pillow (e.g. Linux wheels) would
+    # reorder it again and draw Hebrew backwards unless the BASIC engine is forced.
+    from PIL import ImageFont
+
+    from karaoke_he.fonts import get_font
+
+    assert get_font(40).layout_engine == ImageFont.Layout.BASIC
+    assert get_font(40, arabic=True).layout_engine == ImageFont.Layout.BASIC

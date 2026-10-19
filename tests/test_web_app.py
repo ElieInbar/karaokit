@@ -1,3 +1,4 @@
+import pytest
 import requests
 from fastapi.testclient import TestClient
 
@@ -24,6 +25,12 @@ def test_slugify_falls_back_to_song_when_empty():
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _youtube_enabled(monkeypatch):
+    # Off by default for new installations; these tests exercise the YouTube flow.
+    monkeypatch.setenv("KARAOKIT_ENABLE_YOUTUBE", "1")
 
 
 def test_lyrics_check_endpoint_reports_found(monkeypatch):
@@ -283,3 +290,17 @@ def test_create_job_forwards_the_picked_lrclib_id(monkeypatch):
     res = client.post("/jobs", data={"artist": "A", "title": "B", "youtube_url": "https://youtu.be/abc123", "lrclib_id": "42"})
     assert res.status_code == 200
     assert captured["lrclib_id"] == 42
+
+
+
+def test_youtube_endpoints_refuse_when_youtube_is_disabled(monkeypatch):
+    monkeypatch.setenv("KARAOKIT_ENABLE_YOUTUBE", "0")
+    assert client.get("/api/youtube-metadata", params={"url": "https://youtu.be/abc123"}).status_code == 403
+    res = client.post("/jobs", data={"artist": "A", "title": "B", "youtube_url": "https://youtu.be/abc123"})
+    assert res.status_code == 403 and "KARAOKIT_ENABLE_YOUTUBE" in res.json()["detail"]
+    assert client.get("/api/config").json()["youtube_enabled"] is False
+
+
+def test_config_reports_separation_backend(monkeypatch):
+    monkeypatch.setenv("KARAOKIT_SEPARATION", "local")
+    assert client.get("/api/config").json() == {"youtube_enabled": True, "separation": "local"}

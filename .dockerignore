@@ -1,0 +1,9 @@
+.venv
+.git
+work
+songs
+songs_examples
+legacy
+**/__pycache__
+*.egg-info
+.env

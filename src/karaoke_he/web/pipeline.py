@@ -22,13 +22,13 @@ from karaoke_he.background import render_vinyl_background
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import LyricsNotFoundError, fetch_lrclib_by_id, load_manual_fallback, resolve_lyrics
 from karaoke_he.mux import encode_aac, mux_video
-from karaoke_he.separation import ALIGNMENT_EMISSIONS_NAME, separate_audio_remote
+from karaoke_he import config
+from karaoke_he.separation import ALIGNMENT_EMISSIONS_NAME, separate_audio, separate_audio_remote
 from karaoke_he.subtitle_render import render_karaoke_video
 from karaoke_he.text_utils import normalize_hebrew
 from karaoke_he.web.library import write_job_record
 from karaoke_he.youtube import download_youtube_audio
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Minimum region size (in low-confidence words) worth running diagnostic language-ID on. Tested
 # on a real song: single isolated words are usually just ordinary alignment noise, and Whisper's
@@ -218,7 +218,7 @@ def _resolve_job_lyrics(
     lyrics available, or a deliberate correction - silently replacing them with LRCLIB's version
     (`resolve_lyrics`' normal order) would throw that correction away. They're also saved to
     `songs/<slug>/lyrics.txt`, so a later run without pasted lyrics still has them as a fallback."""
-    songs_dir = songs_dir or PROJECT_ROOT / "songs"
+    songs_dir = songs_dir or config.SONGS_DIR
     if manual_lyrics and manual_lyrics.strip():
         song_dir = songs_dir / song_slug
         song_dir.mkdir(parents=True, exist_ok=True)
@@ -272,7 +272,7 @@ def run_pipeline(
     `language` is one of `languages.LANGUAGES`'s keys (an ISO-639-3 code); the caller (`jobs.py`)
     is expected to have already validated it.
     """
-    work_dir = PROJECT_ROOT / "work" / song_slug
+    work_dir = config.WORK_DIR / song_slug
     work_dir.mkdir(parents=True, exist_ok=True)
 
     if youtube_url:
@@ -301,13 +301,23 @@ def run_pipeline(
     on_progress("separating", None)
     stems_dir = work_dir / "stems"
     input_hash = _file_sha256(local_input)
-    separation = separate_audio_remote(
-        local_input,
-        stems_dir,
-        overwrite=_stems_are_stale(stems_dir, input_hash),
-        with_alignment_emissions=True,
-        on_progress=lambda msg: on_progress("separating", msg),
-    )
+    stale = _stems_are_stale(stems_dir, input_hash)
+    if config.separation_backend() == "modal":
+        separation = separate_audio_remote(
+            local_input,
+            stems_dir,
+            overwrite=stale,
+            app_name=config.MODAL_APP_NAME,
+            with_alignment_emissions=True,
+            on_progress=lambda msg: on_progress("separating", msg),
+        )
+    else:
+        # No account needed, but slow (~20-30 min for a 4-minute song on a laptop) and with no
+        # progress to report; the alignment's acoustic model then also runs locally (below).
+        if stale:
+            on_progress("separating", "running on this computer - this can take 20-30 minutes")
+            (stems_dir / ALIGNMENT_EMISSIONS_NAME).unlink(missing_ok=True)
+        separation = separate_audio(local_input, stems_dir, overwrite=stale)
     (stems_dir / STEMS_SOURCE_STAMP).write_text(input_hash)
 
     on_progress("lyrics", None)

@@ -24,6 +24,33 @@ Multi-language support and web app subsections below for what actually shipped v
 plan (a couple of details changed during implementation, e.g. a real RTL/LTR layout bug the plan
 didn't anticipate).
 
+## Publishing / configuration (open-source, self-hosted)
+
+The project is being prepared for publication as **Karaokit**, an open-source app each user runs
+themselves (the author chose this over a hosted service: no shared GPU bill, no accounts to run,
+and each user decides about YouTube and copyright for their own use). The distribution is named
+`karaokit` in `pyproject.toml`; the Python package is still `karaoke_he`.
+
+- `src/karaoke_he/config.py`: every installation-specific setting, from env vars or `.env`
+  (`.env.example` documents them; `.env` is gitignored). `KARAOKIT_SEPARATION` = `modal` |
+  `local` | `auto` (Modal when `MODAL_TOKEN_ID` or `~/.modal.toml` exists); local mode calls
+  `separation.separate_audio` (slow, no progress, not cancellable mid-separation) and computes
+  the alignment emissions locally. `KARAOKIT_ENABLE_YOUTUBE` (off by default) gates every
+  YouTube endpoint (403) and the page hides the option (`GET /api/config`).
+  `KARAOKIT_DATA_DIR` (default: the repo when running from source, `~/.karaokit` when installed,
+  `/data` in Docker) holds `work/` and `songs/`. The author's own `.env` turns YouTube on.
+- `src/karaoke_he/fonts.py` + `assets/fonts/`: bundled OFL fonts (Rubik for Latin/Hebrew/
+  Cyrillic, Noto Sans Arabic for Arabic), replacing macOS's Arial Unicode (not on Linux, not
+  redistributable). Picked per language for lyrics and per text for titles.
+- LRCLIB requests carry `User-Agent: Karaokit/<version> (+KARAOKIT_HOMEPAGE)`, as LRCLIB asks.
+- `Dockerfile` (CPU-only torch; ffmpeg, mkvtoolnix) + `docker-compose.yml` (port bound to
+  127.0.0.1, named volume for `/data`, settings and Modal token via `.env`). Users deploy the
+  Modal function to their own account once: `docker compose run --rm karaokit modal deploy
+  deploy/modal_app.py`.
+- `README.md` is the public-facing doc (English).
+- Unused heavy dependencies (`whisperx`, `pyannote.audio`, `mutagen`) were dropped; `modal` is
+  now a main dependency.
+
 ## Layout
 
 - `src/karaoke_he/` — the package. One module per pipeline stage: `separation.py`, `lyrics.py`,

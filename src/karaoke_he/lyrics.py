@@ -1,3 +1,4 @@
+import os
 import re
 import threading
 import time
@@ -9,6 +10,21 @@ from pathlib import Path
 import requests
 
 LRCLIB_BASE_URL = "https://lrclib.net/api"
+
+# LRCLIB asks every client to identify itself (app name, version, homepage) in User-Agent.
+# KARAOKIT_HOMEPAGE should point at wherever this copy of the project is published.
+def _user_agent() -> str:
+    try:
+        from importlib.metadata import version
+
+        app_version = version("karaokit")
+    except Exception:  # noqa: BLE001 - running from a source tree that isn't installed
+        app_version = "dev"
+    homepage = os.environ.get("KARAOKIT_HOMEPAGE", "https://github.com/Elieinbar/karaokit")
+    return f"Karaokit/{app_version} (+{homepage})"
+
+
+LRCLIB_HEADERS = {"User-Agent": _user_agent()}
 SYNCED_LINE_RE = re.compile(r"^\[\d{2}:\d{2}\.\d{2,3}\]\s?")
 
 # LRCLIB intermittently answers 503 "ServerOverloaded" for a few seconds at a time (seen live:
@@ -68,7 +84,7 @@ def _lrclib_get(
     delays = LRCLIB_RETRY_DELAYS_SEC if retry_delays is None else retry_delays
     for delay in (*delays, None):
         try:
-            response = requests.get(f"{LRCLIB_BASE_URL}{path}", params=params, timeout=timeout)
+            response = requests.get(f"{LRCLIB_BASE_URL}{path}", params=params, timeout=timeout, headers=LRCLIB_HEADERS)
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             if delay is None:
                 raise

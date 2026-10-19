@@ -86,7 +86,7 @@ def test_fetch_from_lrclib_retries_with_track_name_only_and_picks_closest_durati
 
     calls = []
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, **kwargs):
         calls.append((url, params))
         if url.endswith("/get"):
             return _FakeResponse(404, {})
@@ -118,7 +118,7 @@ def test_fetch_from_lrclib_retries_transient_server_errors(monkeypatch):
     shouldn't fail a job that already spent minutes on download/separation."""
     statuses = iter([503, 503, 200])
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, **kwargs):
         return _FakeResponse(next(statuses), {"plainLyrics": "שלום"})
 
     monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
@@ -133,7 +133,7 @@ def test_fetch_from_lrclib_retries_transient_server_errors(monkeypatch):
 def test_fetch_from_lrclib_gives_up_after_persistent_server_errors(monkeypatch):
     calls = []
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, **kwargs):
         calls.append(url)
         return _FakeResponse(503, {})
 
@@ -152,7 +152,7 @@ def test_fetch_from_lrclib_gives_up_after_persistent_server_errors(monkeypatch):
 def test_fetch_from_lrclib_does_not_retry_not_found(monkeypatch):
     calls = []
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, **kwargs):
         calls.append(url)
         return _FakeResponse(404 if url.endswith("/get") else 200, [] if url.endswith("/search") else {})
 
@@ -175,7 +175,7 @@ def _search_payload():
 
 def test_search_songs_groups_duplicates_and_keeps_the_best_version(monkeypatch):
     lyrics_module._search_cache.clear()
-    monkeypatch.setattr(lyrics_module.requests, "get", lambda url, params=None, timeout=None: _FakeResponse(200, _search_payload()))
+    monkeypatch.setattr(lyrics_module.requests, "get", lambda url, params=None, timeout=None, **kwargs: _FakeResponse(200, _search_payload()))
 
     results = search_songs("chicago downtown")
 
@@ -188,7 +188,7 @@ def test_search_songs_caches_and_ignores_too_short_queries(monkeypatch):
     lyrics_module._search_cache.clear()
     calls = []
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, **kwargs):
         calls.append(params)
         return _FakeResponse(200, _search_payload())
 
@@ -202,7 +202,7 @@ def test_search_songs_caches_and_ignores_too_short_queries(monkeypatch):
 def test_search_songs_retries_rate_limits(monkeypatch):
     lyrics_module._search_cache.clear()
     statuses = iter([429, 503, 200])
-    monkeypatch.setattr(lyrics_module.requests, "get", lambda url, params=None, timeout=None: _FakeResponse(next(statuses), _search_payload()))
+    monkeypatch.setattr(lyrics_module.requests, "get", lambda url, params=None, timeout=None, **kwargs: _FakeResponse(next(statuses), _search_payload()))
     monkeypatch.setattr(lyrics_module, "LRCLIB_INTERACTIVE_RETRY_DELAYS_SEC", (0, 0, 0))
     assert len(search_songs("chicago")) == 2
 
@@ -210,7 +210,7 @@ def test_search_songs_retries_rate_limits(monkeypatch):
 def test_fetch_lrclib_by_id_uses_the_exact_record(monkeypatch):
     seen = []
 
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, **kwargs):
         seen.append(url)
         return _FakeResponse(200, {"id": 42, "plainLyrics": "exact lyrics"}) if url.endswith("/get/42") else _FakeResponse(404, {})
 
