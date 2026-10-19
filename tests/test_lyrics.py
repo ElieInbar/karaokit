@@ -6,7 +6,8 @@ from karaoke_he.lyrics import (
     _lyrics_result_from_lrclib_payload,
     fetch_from_lrclib,
     load_manual_fallback,
-    search_suggestions,
+    fetch_lrclib_by_id,
+    search_songs,
     strip_synced_timestamps,
 )
 
@@ -15,6 +16,7 @@ class _FakeResponse:
     def __init__(self, status_code: int, payload):
         self.status_code = status_code
         self._payload = payload
+        self.headers = {}
 
     def json(self):
         return self._payload
@@ -111,98 +113,6 @@ def test_fetch_from_lrclib_retries_with_track_name_only_and_picks_closest_durati
     assert calls[2][1] == {"track_name": "אור כזה"}
 
 
-def test_search_suggestions_returns_empty_list_for_blank_query():
-    assert search_suggestions("   ") == []
-
-
-def test_search_suggestions_uses_generic_q_param(monkeypatch):
-    calls = []
-
-    def fake_get(url, params=None, timeout=None):
-        calls.append((url, params))
-        return _FakeResponse(200, [])
-
-    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
-    search_suggestions("idan rai")
-
-    assert calls == [(f"{lyrics_module.LRCLIB_BASE_URL}/search", {"q": "idan rai"})]
-
-
-def test_search_suggestions_extracts_only_non_lyrics_fields(monkeypatch):
-    def fake_get(url, params=None, timeout=None):
-        return _FakeResponse(
-            200,
-            [
-                {
-                    "artistName": "Artist One",
-                    "trackName": "Song One",
-                    "albumName": "Album One",
-                    "duration": 200.0,
-                    "plainLyrics": "should never appear in a suggestion",
-                    "syncedLyrics": "[00:00.00]should never appear either",
-                }
-            ],
-        )
-
-    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
-    results = search_suggestions("artist one")
-
-    assert len(results) == 1
-    assert results[0].artist == "Artist One"
-    assert results[0].title == "Song One"
-    assert results[0].album == "Album One"
-    assert results[0].duration_sec == 200.0
-    assert not hasattr(results[0], "plainLyrics")
-    assert not hasattr(results[0], "syncedLyrics")
-
-
-def test_search_suggestions_dedupes_by_artist_and_title(monkeypatch):
-    def fake_get(url, params=None, timeout=None):
-        return _FakeResponse(
-            200,
-            [
-                {"artistName": "A", "trackName": "B", "albumName": "Album 1", "duration": 100.0},
-                {"artistName": "A", "trackName": "B", "albumName": "Album 2 (Remaster)", "duration": 101.0},
-                {"artistName": "A", "trackName": "C", "duration": 102.0},
-            ],
-        )
-
-    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
-    results = search_suggestions("a")
-
-    assert len(results) == 2
-    assert [(r.artist, r.title) for r in results] == [("A", "B"), ("A", "C")]
-
-
-def test_search_suggestions_skips_entries_missing_artist_or_title(monkeypatch):
-    def fake_get(url, params=None, timeout=None):
-        return _FakeResponse(
-            200,
-            [
-                {"artistName": None, "trackName": "B"},
-                {"artistName": "A", "trackName": None},
-                {"artistName": "A", "trackName": "B"},
-            ],
-        )
-
-    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
-    results = search_suggestions("a")
-
-    assert len(results) == 1
-
-
-def test_search_suggestions_respects_limit(monkeypatch):
-    def fake_get(url, params=None, timeout=None):
-        return _FakeResponse(
-            200, [{"artistName": f"Artist {i}", "trackName": f"Song {i}"} for i in range(20)]
-        )
-
-    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
-    results = search_suggestions("a", limit=3)
-
-    assert len(results) == 3
-
-
 def test_fetch_from_lrclib_retries_transient_server_errors(monkeypatch):
     """LRCLIB intermittently answers 503 "ServerOverloaded"; a blip at the lyrics stage
     shouldn't fail a job that already spent minutes on download/separation."""
@@ -251,3 +161,60 @@ def test_fetch_from_lrclib_does_not_retry_not_found(monkeypatch):
 
     assert fetch_from_lrclib("artist", "title") is None
     assert calls.count(calls[0]) == 1
+
+
+
+def _search_payload():
+    return [
+        {"id": 1, "artistName": "OMER BALIK", "trackName": "OMER BALIK - Chicago Downtown [ZbIABUsnxFg]", "plainLyrics": "plain"},
+        {"id": 2, "artistName": "Ömer Balık", "trackName": "Chicago Downtown", "syncedLyrics": "[00:01.00]synced line"},
+        {"id": 3, "artistName": "Omer Adam", "trackName": "מביט מהצד", "plainLyrics": None, "syncedLyrics": None},
+        {"id": 4, "artistName": "Someone", "trackName": "Instrumental cut", "instrumental": True},
+    ]
+
+
+def test_search_songs_groups_duplicates_and_keeps_the_best_version(monkeypatch):
+    lyrics_module._search_cache.clear()
+    monkeypatch.setattr(lyrics_module.requests, "get", lambda url, params=None, timeout=None: _FakeResponse(200, _search_payload()))
+
+    results = search_songs("chicago downtown")
+
+    assert [(r.lrclib_id, r.title) for r in results] == [(2, "Chicago Downtown"), (3, "מביט מהצד")]
+    assert results[0].synced and results[0].lyrics == "synced line"  # synced wins over plain
+    assert results[1].lyrics is None  # listed, but marked as having no lyrics
+
+
+def test_search_songs_caches_and_ignores_too_short_queries(monkeypatch):
+    lyrics_module._search_cache.clear()
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(params)
+        return _FakeResponse(200, _search_payload())
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    assert search_songs("a") == []
+    search_songs("Omer  Adam")
+    search_songs("omer adam")
+    assert calls == [{"q": "Omer Adam"}]
+
+
+def test_search_songs_retries_rate_limits(monkeypatch):
+    lyrics_module._search_cache.clear()
+    statuses = iter([429, 503, 200])
+    monkeypatch.setattr(lyrics_module.requests, "get", lambda url, params=None, timeout=None: _FakeResponse(next(statuses), _search_payload()))
+    monkeypatch.setattr(lyrics_module, "LRCLIB_INTERACTIVE_RETRY_DELAYS_SEC", (0, 0, 0))
+    assert len(search_songs("chicago")) == 2
+
+
+def test_fetch_lrclib_by_id_uses_the_exact_record(monkeypatch):
+    seen = []
+
+    def fake_get(url, params=None, timeout=None):
+        seen.append(url)
+        return _FakeResponse(200, {"id": 42, "plainLyrics": "exact lyrics"}) if url.endswith("/get/42") else _FakeResponse(404, {})
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    assert fetch_lrclib_by_id(42).text == "exact lyrics"
+    assert fetch_lrclib_by_id(7) is None
+    assert seen[0].endswith("/api/get/42")

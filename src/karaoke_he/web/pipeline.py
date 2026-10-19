@@ -20,7 +20,7 @@ from karaoke_he.alignment import (
 )
 from karaoke_he.background import render_vinyl_background
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
-from karaoke_he.lyrics import LyricsNotFoundError, load_manual_fallback, resolve_lyrics
+from karaoke_he.lyrics import LyricsNotFoundError, fetch_lrclib_by_id, load_manual_fallback, resolve_lyrics
 from karaoke_he.mux import encode_aac, mux_video
 from karaoke_he.separation import ALIGNMENT_EMISSIONS_NAME, separate_audio_remote
 from karaoke_he.subtitle_render import render_karaoke_video
@@ -209,6 +209,7 @@ def _resolve_job_lyrics(
     title: str,
     manual_lyrics: str | None,
     *,
+    lrclib_id: int | None = None,
     album: str | None,
     duration_sec: float,
     songs_dir: Path | None = None,
@@ -223,6 +224,12 @@ def _resolve_job_lyrics(
         song_dir.mkdir(parents=True, exist_ok=True)
         (song_dir / "lyrics.txt").write_text(manual_lyrics, encoding="utf-8")
         result = load_manual_fallback(song_slug, songs_dir)
+        if result is not None:
+            return result
+    if lrclib_id is not None:
+        # The exact song picked in the search box - not a fresh artist/title search, which
+        # could land on a different version than the lyrics the user saw.
+        result = fetch_lrclib_by_id(lrclib_id)
         if result is not None:
             return result
     try:
@@ -240,6 +247,7 @@ def run_pipeline(
     title: str,
     *,
     youtube_url: str | None = None,
+    lrclib_id: int | None = None,
     album: str | None = None,
     manual_lyrics: str | None = None,
     language: str = DEFAULT_LANGUAGE,
@@ -304,7 +312,7 @@ def run_pipeline(
 
     on_progress("lyrics", None)
     lyrics_result = _resolve_job_lyrics(
-        song_slug, artist, title, manual_lyrics, album=album, duration_sec=separation.duration_sec
+        song_slug, artist, title, manual_lyrics, lrclib_id=lrclib_id, album=album, duration_sec=separation.duration_sec
     )
 
     lang_config = LANGUAGES[language]

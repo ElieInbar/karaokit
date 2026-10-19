@@ -145,16 +145,6 @@ def test_lyrics_check_endpoint_falls_back_to_lrclib_when_youtube_metadata_fails(
     assert res.json() == {"found": False}
 
 
-def test_suggestions_endpoint_returns_empty_list_on_transient_lrclib_failure(monkeypatch):
-    def _raise(q):
-        raise requests.exceptions.ConnectionError("boom")
-
-    monkeypatch.setattr(app_module, "search_suggestions", _raise)
-    res = client.get("/api/suggestions", params={"q": "A"})
-    assert res.status_code == 200
-    assert res.json() == []
-
-
 def test_lyrics_check_endpoint_requires_artist_and_title():
     res = client.get("/api/lyrics-check", params={"artist": "A"})
     assert res.status_code == 422
@@ -249,3 +239,47 @@ def test_cancel_endpoint_maps_unknown_and_finished_jobs(monkeypatch):
     assert client.post("/jobs/done/cancel").status_code == 409
     monkeypatch.setattr(app_module, "cancel_job", lambda job_id: True)
     assert client.post("/jobs/running/cancel").json() == {"cancelling": True}
+
+
+
+def test_search_endpoint_returns_songs_with_lyrics_and_language(monkeypatch):
+    from karaoke_he.lyrics import SongMatch
+
+    monkeypatch.setattr(app_module, "search_songs", lambda q: [
+        SongMatch(lrclib_id=7, artist="Omer Adam", title="מביט מהצד", album=None, duration_sec=224.0, synced=True, lyrics="שורה"),
+        SongMatch(lrclib_id=8, artist="X", title="Y", album=None, duration_sec=None, synced=False, lyrics=None),
+    ])
+    monkeypatch.setattr(app_module, "detect_language", lambda text: "heb")
+
+    data = client.get("/api/search", params={"q": "omer"}).json()
+
+    assert "error" not in data
+    assert data["results"][0]["lrclib_id"] == 7
+    assert data["results"][0]["detected_language"] == "heb"
+    assert data["results"][1]["detected_language"] is None
+
+
+def test_search_endpoint_reports_lrclib_outage_instead_of_failing(monkeypatch):
+    def _raise(q):
+        raise requests.exceptions.HTTPError("503")
+
+    monkeypatch.setattr(app_module, "search_songs", _raise)
+    data = client.get("/api/search", params={"q": "omer"}).json()
+    assert data["results"] == [] and "busy" in data["error"]
+
+
+def test_create_job_forwards_the_picked_lrclib_id(monkeypatch):
+    captured = {}
+
+    def _fake_create_job(song_slug, input_audio, artist, title, **kwargs):
+        captured.update(kwargs)
+
+        class _FakeJob:
+            id = "job1"
+
+        return _FakeJob()
+
+    monkeypatch.setattr(app_module, "create_job", _fake_create_job)
+    res = client.post("/jobs", data={"artist": "A", "title": "B", "youtube_url": "https://youtu.be/abc123", "lrclib_id": "42"})
+    assert res.status_code == 200
+    assert captured["lrclib_id"] == 42

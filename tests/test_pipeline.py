@@ -155,3 +155,17 @@ def test_missing_alignment_emissions_are_computed_and_saved(monkeypatch, tmp_pat
     path = tmp_path / "alignment_emissions.npz"
     assert pipeline_module._load_or_compute_emissions(path, tmp_path / "v.wav", on_progress=lambda m: None) is computed
     assert path.is_file()
+
+
+
+def test_picked_lrclib_id_is_used_instead_of_an_artist_title_search(monkeypatch, tmp_path):
+    from karaoke_he.lyrics import LyricsResult, LyricsSource
+
+    def _fail_resolve(*args, **kwargs):
+        raise AssertionError("must fetch the picked record, not search again")
+
+    monkeypatch.setattr(pipeline_module, "resolve_lyrics", _fail_resolve)
+    monkeypatch.setattr(pipeline_module, "fetch_lrclib_by_id", lambda i: LyricsResult("picked", LyricsSource.LRCLIB, True, None))
+
+    result = pipeline_module._resolve_job_lyrics("a_b", "A", "B", None, lrclib_id=42, album=None, duration_sec=60.0, songs_dir=tmp_path)
+    assert result.text == "picked"

@@ -279,7 +279,38 @@
   .source-toggle label:has(input:checked) { background: var(--chip-on-bg); color: var(--chip-on-text); }
   .source-toggle label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  .autocomplete { position: relative; }
+
+  /* --- "Find your song" search --- */
+  .song-search { position: relative; }
+  .song-search input { padding-right: 30px; }
+  .search-spinner {
+    position: absolute; right: 4px; top: 50%; width: 14px; height: 14px; margin-top: -7px;
+    border: 2px solid var(--ink-faint); border-top-color: transparent; border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  .song-results .result { display: flex; gap: 12px; align-items: center; padding: 9px 10px; border-radius: 6px; cursor: pointer; }
+  .song-results .result:hover, .song-results .result.active { background: var(--hairline); }
+  .song-results .r-main { flex: 1; min-width: 0; }
+  .song-results .r-title { text-align: left; font-weight: 700; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .song-results .r-meta { color: var(--ink-soft); font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .song-results .note { padding: 10px; color: var(--ink-soft); font-size: 0.88rem; }
+  .song-results .note button { margin-left: 6px; }
+  .song-results .note .link-btn { display: inline; margin: 0; font-size: inherit; }
+  .badge { flex: none; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 7px; border-radius: 999px; border: 1px solid currentColor; }
+  .badge.synced { color: var(--accent); }
+  .badge.none { color: var(--ink-faint); }
+
+  .song-card { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1.5px solid var(--rule); border-radius: 14px; }
+  .song-card-disc { flex: none; width: 38px; height: 38px; border-radius: 50%; background: radial-gradient(circle, var(--paper) 0 2px, var(--accent) 3px 9px, var(--groove-a) 10px 11px, var(--groove-b) 12px 13px, var(--groove-a) 14px); }
+  .song-card-info { flex: 1; min-width: 0; }
+  .song-card-title { font-weight: 700; font-size: 1.05rem; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .song-card-meta { color: var(--ink-soft); font-size: 0.82rem; margin-top: 2px; }
+
+  .link-btn {
+    width: auto; margin: 8px 0 0; padding: 0; background: none; color: var(--ink-soft);
+    font-size: 0.82rem; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; border-radius: 0;
+  }
+  .link-btn:hover:not(:disabled) { background: none; color: var(--ink); }
 
   .suggestions {
     list-style: none;
@@ -300,11 +331,6 @@
 
   .suggestions[hidden] { display: none; }
 
-  .suggestions li { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
-  .suggestions li .s-title { font-weight: 700; }
-  .suggestions li .s-artist { color: var(--ink-soft); }
-  .suggestions li .s-album { color: var(--ink-soft); font-size: 0.8rem; }
-  .suggestions li:hover, .suggestions li.active { background: var(--hairline); }
 
   /* --- Buttons --- */
 
@@ -540,39 +566,59 @@
       <span class="lyrics-status" id="youtube-status" hidden></span>
     </div>
 
-    <div class="row">
-      <div class="field autocomplete">
-        <label for="artist">Artist</label>
-        <input type="text" id="artist" name="artist" dir="auto" autocomplete="off" required>
-        <ul class="suggestions" id="artist-suggestions" hidden></ul>
+    <div class="field">
+      <label for="song-search">Song</label>
+      <div class="song-search" id="song-search-box">
+        <input type="text" id="song-search" dir="auto" autocomplete="off" spellcheck="false"
+               placeholder="Search a title or an artist, e.g. Omer Adam מביט מהצד"
+               role="combobox" aria-expanded="false" aria-controls="song-results" aria-autocomplete="list">
+        <span class="search-spinner" id="search-spinner" hidden></span>
+        <div class="suggestions song-results" id="song-results" role="listbox" hidden></div>
       </div>
-      <div class="field autocomplete">
-        <label for="title">Title</label>
-        <input type="text" id="title" name="title" dir="auto" autocomplete="off" required>
-        <ul class="suggestions" id="title-suggestions" hidden></ul>
+      <div class="song-card" id="song-card" hidden>
+        <div class="song-card-disc" aria-hidden="true"></div>
+        <div class="song-card-info">
+          <div class="song-card-title" id="song-card-title" dir="auto"></div>
+          <div class="song-card-meta" id="song-card-meta"></div>
+        </div>
+        <button type="button" class="secondary" id="change-song-btn">Change</button>
+      </div>
+      <span class="lyrics-status not-found" id="song-error" hidden></span>
+      <button type="button" class="link-btn" id="manual-toggle" aria-expanded="false" aria-controls="manual-details">Can't find it? Enter details manually</button>
+    </div>
+    <input type="hidden" name="lrclib_id" id="lrclib-id" disabled>
+
+    <div id="manual-details" hidden>
+      <div class="row">
+        <div class="field">
+          <label for="artist">Artist</label>
+          <input type="text" id="artist" name="artist" dir="auto" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="title">Title</label>
+          <input type="text" id="title" name="title" dir="auto" autocomplete="off">
+        </div>
+      </div>
+      <div class="field">
+        <label for="album">Album <span class="hint">(optional)</span></label>
+        <input type="text" id="album" name="album" dir="auto">
       </div>
     </div>
 
-    <div class="row">
-      <div class="field">
-        <label for="album">Album <span class="hint">(optional)</span></label>
-        <input type="text" id="album" name="album">
-      </div>
-      <div class="field">
-        <label for="language">Language <span class="hint" id="language-detected-hint"></span></label>
-        <select id="language" name="language">
-          <option value="heb" selected>Hebrew</option>
-          <option value="eng">English</option>
-          <option value="fra">French</option>
-          <option value="spa">Spanish</option>
-          <option value="rus">Russian</option>
-          <option value="ara">Arabic</option>
-        </select>
-      </div>
+    <div class="field">
+      <label for="language">Language <span class="hint" id="language-detected-hint"></span></label>
+      <select id="language" name="language">
+        <option value="heb" selected>Hebrew</option>
+        <option value="eng">English</option>
+        <option value="fra">French</option>
+        <option value="spa">Spanish</option>
+        <option value="rus">Russian</option>
+        <option value="ara">Arabic</option>
+      </select>
     </div>
 
     <div class="lyrics-check-row">
-      <button type="button" class="secondary" id="check-lyrics-btn">
+      <button type="button" class="secondary" id="check-lyrics-btn" hidden>
         <span class="spinner"></span>
         <span>Check lyrics</span>
       </button>
@@ -653,97 +699,7 @@ const ALIGN_SUBSTEPS = [
   "computing alignment",
 ];
 
-// --- Artist/title autocomplete (backed by /api/suggestions -> LRCLIB search) ---
 
-function setupAutocomplete(inputId, listId) {
-  const input = document.getElementById(inputId);
-  const list = document.getElementById(listId);
-  const artistInput = document.getElementById("artist");
-  const titleInput = document.getElementById("title");
-  const albumInput = document.getElementById("album");
-
-  let debounceTimer = null;
-  let abortController = null;
-  let activeIndex = -1;
-
-  function hide() {
-    // Also drop any search still in flight: a late response would otherwise reopen the list
-    // after Escape/blur, on top of whatever the user clicks next.
-    clearTimeout(debounceTimer);
-    if (abortController) abortController.abort();
-    list.hidden = true;
-    list.innerHTML = "";
-    activeIndex = -1;
-  }
-
-  function render(suggestions) {
-    list.innerHTML = "";
-    suggestions.forEach((s, i) => {
-      const li = document.createElement("li");
-      li.innerHTML = `<div class="s-title">${escapeHtml(s.title)}</div>` +
-        `<div class="s-artist">${escapeHtml(s.artist)}</div>` +
-        (s.album ? `<div class="s-album">${escapeHtml(s.album)}</div>` : "");
-      li.addEventListener("mousedown", (e) => {
-        // mousedown (not click) so this fires before the input's blur event hides the list.
-        e.preventDefault();
-        artistInput.value = s.artist;
-        titleInput.value = s.title;
-        if (s.album) albumInput.value = s.album;
-        hide();
-      });
-      list.appendChild(li);
-    });
-    list.hidden = suggestions.length === 0;
-  }
-
-  function updateActive() {
-    [...list.children].forEach((li, i) => li.classList.toggle("active", i === activeIndex));
-  }
-
-  input.addEventListener("input", () => {
-    clearTimeout(debounceTimer);
-    const query = [artistInput.value, titleInput.value].map(v => v.trim()).filter(Boolean).join(" ");
-    if (query.length < 2) {
-      hide();
-      return;
-    }
-    debounceTimer = setTimeout(async () => {
-      if (abortController) abortController.abort();
-      abortController = new AbortController();
-      try {
-        const res = await fetch(`/api/suggestions?q=${encodeURIComponent(query)}`, { signal: abortController.signal });
-        if (!res.ok) return;
-        const suggestions = await res.json();
-        if (document.activeElement === input) render(suggestions);
-      } catch (err) {
-        if (err.name !== "AbortError") hide();
-      }
-    }, 300);
-  });
-
-  input.addEventListener("keydown", (e) => {
-    if (list.hidden) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      activeIndex = Math.min(activeIndex + 1, list.children.length - 1);
-      updateActive();
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      activeIndex = Math.max(activeIndex - 1, -1);
-      updateActive();
-    } else if (e.key === "Enter" && activeIndex >= 0) {
-      e.preventDefault();
-      list.children[activeIndex].dispatchEvent(new MouseEvent("mousedown"));
-    } else if (e.key === "Escape") {
-      hide();
-    }
-  });
-
-  input.addEventListener("blur", hide);
-}
-
-setupAutocomplete("artist", "artist-suggestions");
-setupAutocomplete("title", "title-suggestions");
 
 // --- Audio source toggle: upload a file, or paste a YouTube link (downloaded server-side as the
 // pipeline's first stage). Disabling the inactive input excludes it from the submitted FormData
@@ -806,12 +762,27 @@ async function fetchYoutubeInfo() {
     if (!res.ok) throw new Error(await errorMessage(res));
     const data = await res.json();
     lastFetchedUrl = url;
-    artistInput.value = data.suggested_artist;
-    titleInput.value = data.suggested_title;
-    resetLyricsCheck();
     youtubeStatus.className = "lyrics-status found";
-    youtubeStatus.textContent = `✓ "${data.title}" — check the artist and title below.`;
-    checkLyrics();
+    youtubeStatus.textContent = `✓ "${data.title}"`;
+    clearPickedSong();
+    resetLyricsCheck();
+    const query = `${data.suggested_artist} ${data.suggested_title}`.trim();
+    songSearch.value = query;
+    const results = await runSearch(query, { open: false });
+    const match = results && strongMatch(results, data.suggested_title, data.duration_sec);
+    if (match) {
+      pickSong(match);
+    } else if (results && results.length) {
+      youtubeStatus.textContent = `✓ "${data.title}" — pick the matching song below.`;
+      songSearch.focus();
+      renderResults();
+    } else {
+      // Nothing on LRCLIB: fall back to the video's own details (and its description's lyrics).
+      artistInput.value = data.suggested_artist;
+      titleInput.value = data.suggested_title;
+      openManual(true);
+      checkLyrics();
+    }
   } catch (err) {
     youtubeStatus.className = "lyrics-status not-found";
     youtubeStatus.textContent = "Could not fetch video info: " + err.message;
@@ -876,7 +847,11 @@ function resetLyricsCheck() {
   updateGenerateButtonState();
 }
 
-[artistInput, titleInput, albumInput].forEach(el => el.addEventListener("input", resetLyricsCheck));
+[artistInput, titleInput, albumInput].forEach(el => el.addEventListener("input", () => {
+  // Hand-edited details no longer describe the song picked in the search box.
+  if (!lrclibIdInput.disabled) clearPickedSong({ keepDetails: true });
+  resetLyricsCheck();
+}));
 lyricsTextarea.addEventListener("input", () => {
   if (autoFilledLyrics !== null && lyricsTextarea.value !== autoFilledLyrics) {
     autoFilledLyrics = null;
@@ -916,22 +891,7 @@ async function checkLyrics() {
     const data = await res.json();
 
     if (data.found) {
-      lyricsConfirmed = true;
-      lastCheckedText = data.text;
-      lyricsStatus.className = "lyrics-status found";
-      if (data.source === "youtube_description") {
-        lyricsStatus.textContent = "✓ Lyrics found in the video description";
-        fillLyricsField(data.text, "(from the video description — edit freely, this version will be used)");
-      } else {
-        lyricsStatus.textContent = `✓ Lyrics found on LRCLIB${data.synced ? " (synced)" : ""}`;
-        reviewLyricsBtn.hidden = false;
-      }
-
-      const option = data.detected_language && languageSelect.querySelector(`option[value="${data.detected_language}"]`);
-      if (option) {
-        if (!languageManuallySet) languageSelect.value = data.detected_language;
-        languageDetectedHint.textContent = `(detected: ${option.textContent})`;
-      }
+      applyFoundLyrics(data);
     } else {
       lyricsConfirmed = false;
       lastCheckedText = null;
@@ -950,6 +910,29 @@ async function checkLyrics() {
   }
 }
 
+// Marks lyrics as confirmed (from a search pick, a video description, or a manual check) and
+// applies the detected language unless the user already chose one.
+function applyFoundLyrics({ text, source, synced, detected_language }) {
+  lyricsConfirmed = true;
+  lastCheckedText = text;
+  lyricsStatus.hidden = false;
+  lyricsStatus.className = "lyrics-status found";
+  if (source === "youtube_description") {
+    lyricsStatus.textContent = "✓ Lyrics found in the video description";
+    fillLyricsField(text, "(from the video description — edit freely, this version will be used)");
+    reviewLyricsBtn.hidden = true;
+  } else {
+    lyricsStatus.textContent = `✓ Lyrics ready${synced ? " (synced)" : ""}`;
+    reviewLyricsBtn.hidden = false;
+  }
+  const option = detected_language && languageSelect.querySelector(`option[value="${detected_language}"]`);
+  if (option) {
+    if (!languageManuallySet) languageSelect.value = detected_language;
+    languageDetectedHint.textContent = `(detected: ${option.textContent})`;
+  }
+  updateGenerateButtonState();
+}
+
 // Loads LRCLIB's lyrics into the editable field: whatever is there when generating is what gets
 // used (the backend gives pasted lyrics priority over LRCLIB), so fixing a typo is just editing.
 reviewLyricsBtn.addEventListener("click", () => {
@@ -964,6 +947,219 @@ reviewLyricsBtn.addEventListener("click", () => {
   lyricsTextarea.focus();
   lyricsTextarea.setSelectionRange(0, 0);
   lyricsTextarea.scrollIntoView({ behavior: "smooth", block: "center" });
+});
+
+// --- "Find your song": one search box over LRCLIB (title and/or artist, any language). Picking a
+// result fills artist/title/album, confirms the lyrics that came with it and records its LRCLIB id,
+// so the job uses exactly that record. Artist/title fields stay available as a manual fallback. ---
+
+const songSearch = document.getElementById("song-search");
+const songSearchBox = document.getElementById("song-search-box");
+const songResults = document.getElementById("song-results");
+const searchSpinner = document.getElementById("search-spinner");
+const songCard = document.getElementById("song-card");
+const songCardTitle = document.getElementById("song-card-title");
+const songCardMeta = document.getElementById("song-card-meta");
+const songError = document.getElementById("song-error");
+const lrclibIdInput = document.getElementById("lrclib-id");
+const manualToggle = document.getElementById("manual-toggle");
+const manualDetails = document.getElementById("manual-details");
+
+let searchTimer = null;
+let searchController = null;
+let searchResults = [];
+let activeResult = -1;
+
+// LRCLIB often stores the artist's name as the album (self-titled uploads) - not worth repeating.
+function songMeta(r) {
+  const album = r.album && fold(r.album) !== fold(r.artist) ? r.album : null;
+  return [r.artist, album, formatDuration(r.duration_sec)].filter(Boolean).map(v => `<bdi>${escapeHtml(v)}</bdi>`).join(" · ");
+}
+
+function formatDuration(sec) {
+  if (!sec && sec !== 0) return "";
+  const s = Math.round(sec);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function fold(text) {
+  return (text || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function setResultsOpen(open) {
+  songResults.hidden = !open;
+  songSearch.setAttribute("aria-expanded", String(open));
+}
+
+function showNote(html) {
+  songResults.innerHTML = `<div class="note">${html}</div>`;
+  setResultsOpen(true);
+}
+
+function renderResults() {
+  if (!searchResults.length) {
+    showNote('No match. Try other words, or <button type="button" class="link-btn" data-manual>enter details manually</button>.');
+    return;
+  }
+  songResults.innerHTML = searchResults.map((r, i) => {
+    const meta = songMeta(r);
+    const badge = !r.lyrics ? '<span class="badge none">no lyrics</span>' : r.synced ? '<span class="badge synced">synced</span>' : "";
+    return `<div class="result${i === activeResult ? " active" : ""}" role="option" data-index="${i}">
+      <div class="r-main"><div class="r-title" dir="auto">${escapeHtml(r.title)}</div><div class="r-meta">${meta}</div></div>${badge}
+    </div>`;
+  }).join("");
+  setResultsOpen(true);
+}
+
+async function runSearch(query, { open = true } = {}) {
+  clearTimeout(searchTimer);
+  if (searchController) searchController.abort();
+  query = query.trim();
+  if (query.length < 2) {
+    searchResults = [];
+    setResultsOpen(false);
+    return [];
+  }
+  searchController = new AbortController();
+  searchSpinner.hidden = false;
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal: searchController.signal });
+    if (!res.ok) throw new Error(await errorMessage(res));
+    const data = await res.json();
+    searchResults = data.results || [];
+    activeResult = -1;
+    if (data.error) {
+      if (open) showNote(`${escapeHtml(data.error)} <button type="button" class="secondary" data-retry>Retry</button>`);
+    } else if (open) {
+      renderResults();
+    }
+    return searchResults;
+  } catch (err) {
+    if (err.name === "AbortError") return null;
+    if (open) showNote(`Search failed: ${escapeHtml(err.message)} <button type="button" class="secondary" data-retry>Retry</button>`);
+    return [];
+  } finally {
+    searchSpinner.hidden = true;
+  }
+}
+
+function pickSong(r) {
+  resetLyricsCheck();
+  artistInput.value = r.artist;
+  titleInput.value = r.title;
+  albumInput.value = r.album || "";
+  lrclibIdInput.value = r.lrclib_id;
+  lrclibIdInput.disabled = false;
+  songCardTitle.textContent = r.title;
+  songCardMeta.innerHTML = songMeta(r);
+  songSearchBox.hidden = true;
+  songCard.hidden = false;
+  songError.hidden = true;
+  setResultsOpen(false);
+  if (r.lyrics) {
+    applyFoundLyrics({ text: r.lyrics, source: "lrclib", synced: r.synced, detected_language: r.detected_language });
+  } else {
+    lyricsStatus.hidden = false;
+    lyricsStatus.className = "lyrics-status not-found";
+    lyricsStatus.textContent = "✗ LRCLIB has no lyrics for this song — paste them below to continue.";
+  }
+}
+
+function clearPickedSong({ keepDetails = false } = {}) {
+  lrclibIdInput.value = "";
+  lrclibIdInput.disabled = true;
+  songCard.hidden = true;
+  songSearchBox.hidden = false;
+  if (!keepDetails) {
+    artistInput.value = "";
+    titleInput.value = "";
+    albumInput.value = "";
+  }
+}
+
+songSearch.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  songError.hidden = true;
+  // Results for the previous text are no longer valid - don't leave them up looking pickable.
+  searchResults = [];
+  if (songSearch.value.trim().length >= 2) showNote("Searching…");
+  else setResultsOpen(false);
+  searchTimer = setTimeout(() => runSearch(songSearch.value), 300);
+});
+
+songSearch.addEventListener("keydown", (e) => {
+  if (songResults.hidden || !searchResults.length) {
+    if (e.key === "Enter") e.preventDefault(); // never submit the form from the search box
+    return;
+  }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    activeResult = (activeResult + step + searchResults.length) % searchResults.length;
+    renderResults();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    pickSong(searchResults[Math.max(activeResult, 0)]);
+  } else if (e.key === "Escape") {
+    setResultsOpen(false);
+  }
+});
+
+songSearch.addEventListener("focus", () => {
+  if (searchResults.length && songSearch.value.trim()) renderResults();
+});
+songSearch.addEventListener("blur", () => setTimeout(() => setResultsOpen(false), 150));
+
+songResults.addEventListener("mousedown", (e) => {
+  e.preventDefault(); // keep focus in the input so blur doesn't close the list first
+  const item = e.target.closest(".result");
+  if (item) return pickSong(searchResults[Number(item.dataset.index)]);
+  if (e.target.closest("[data-retry]")) return runSearch(songSearch.value);
+  if (e.target.closest("[data-manual]")) return openManual(true);
+});
+
+document.getElementById("change-song-btn").addEventListener("click", () => {
+  clearPickedSong();
+  resetLyricsCheck();
+  songSearch.focus();
+  songSearch.select();
+  if (searchResults.length) renderResults();
+});
+
+function openManual(open) {
+  manualDetails.hidden = !open;
+  manualToggle.setAttribute("aria-expanded", String(open));
+  manualToggle.textContent = open ? "Hide manual details" : "Can't find it? Enter details manually";
+  checkLyricsBtn.hidden = !open;
+  setResultsOpen(false);
+  if (open) {
+    if (!artistInput.value && songSearch.value.trim() && lrclibIdInput.disabled) titleInput.value = songSearch.value.trim();
+    artistInput.focus();
+  }
+}
+manualToggle.addEventListener("click", () => openManual(manualDetails.hidden));
+
+// The search returns songs, not exact titles - a pick is "strong" when the title matches and the
+// duration agrees with the audio we have (YouTube tells us), so it can be selected without asking.
+function strongMatch(results, title, durationSec) {
+  const candidates = results.filter(r => r.lyrics && fold(r.title) === fold(title));
+  if (!candidates.length) return null;
+  if (durationSec) {
+    const close = candidates.filter(r => r.duration_sec && Math.abs(r.duration_sec - durationSec) <= 4);
+    return close[0] || null;
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+// Uploads: suggest a search from the file name ("Artist - Title [id].mp3" and similar).
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  if (!file || !lrclibIdInput.disabled) return;
+  const guess = file.name.replace(/\.[^.]+$/, "").replace(/\[[^\]]*\]|\([^)]*\)/g, " ").replace(/[_]+/g, " ").replace(/\s+-\s+/g, " ").replace(/\s+/g, " ").trim();
+  if (!guess) return;
+  songSearch.value = guess;
+  songSearch.focus();
+  runSearch(guess);
 });
 
 function progressPercent(stage, detail) {
@@ -1125,6 +1321,13 @@ function watchJob(jobId) {
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (!artistInput.value.trim() || !titleInput.value.trim()) {
+    songError.hidden = false;
+    songError.textContent = "Pick a song above, or enter its artist and title manually.";
+    if (!lrclibIdInput.disabled) clearPickedSong();
+    openManual(true);
+    return;
+  }
   clearInterval(pollTimer);
   const formData = new FormData(form);
   const fromYoutube = document.getElementById("source-youtube").checked;

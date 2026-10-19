@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from karaoke_he.language_detect import detect_language
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
-from karaoke_he.lyrics import fetch_from_lrclib, search_suggestions
+from karaoke_he.lyrics import fetch_from_lrclib, search_songs
 from karaoke_he.web.library import find_entry_video, list_library, resolve_song_dir
 from karaoke_he.web.pipeline import PROJECT_ROOT, make_browser_preview
 from karaoke_he.web.jobs import JobConflictError, cancel_job, create_job, get_job
@@ -41,20 +41,31 @@ def index() -> str:
 LRCLIB_UNAVAILABLE_MESSAGE = "LRCLIB seems to be temporarily unavailable — try again in a moment."
 
 
-@app.get("/api/suggestions")
-def suggestions_endpoint(q: str = "") -> list[dict]:
-    """Backs the artist/title autocomplete dropdown. Proxied through the backend (rather than
-    the frontend calling LRCLIB directly) so the API key/rate-limit story stays server-side and
-    the response can be trimmed to just what the dropdown needs. A transient LRCLIB outage here
-    just means no suggestions - not worth surfacing as an error for an autocomplete dropdown."""
+@app.get("/api/search")
+def search_endpoint(q: str = "") -> dict:
+    """Backs the "Find your song" box: songs matching free text (title and/or artist, any
+    language), each with its lyrics already attached, so picking one confirms the lyrics with
+    no second request. LRCLIB being down/rate-limited comes back as `error` (with an empty list)
+    rather than a 500, so the page can say "busy, retry" instead of silently showing nothing."""
     try:
-        suggestions = search_suggestions(q)
+        matches = search_songs(q)
     except requests.exceptions.RequestException:
-        return []
-    return [
-        {"artist": s.artist, "title": s.title, "album": s.album, "duration_sec": s.duration_sec}
-        for s in suggestions
-    ]
+        return {"results": [], "error": "LRCLIB (the lyrics database) is busy right now. Try again in a moment."}
+    return {
+        "results": [
+            {
+                "lrclib_id": m.lrclib_id,
+                "artist": m.artist,
+                "title": m.title,
+                "album": m.album,
+                "duration_sec": m.duration_sec,
+                "synced": m.synced,
+                "lyrics": m.lyrics,
+                "detected_language": detect_language(m.lyrics) if m.lyrics else None,
+            }
+            for m in matches
+        ]
+    }
 
 
 @app.get("/api/lyrics-check")
@@ -137,6 +148,7 @@ def youtube_metadata_endpoint(url: str) -> dict:
 async def create_job_endpoint(
     file: UploadFile | None = File(None),
     youtube_url: str | None = Form(None),
+    lrclib_id: int | None = Form(None),
     artist: str = Form(...),
     title: str = Form(...),
     album: str | None = Form(None),
@@ -165,6 +177,7 @@ async def create_job_endpoint(
             artist,
             title,
             youtube_url=youtube_url or None,
+            lrclib_id=lrclib_id,
             album=album or None,
             manual_lyrics=lyrics or None,
             language=language,

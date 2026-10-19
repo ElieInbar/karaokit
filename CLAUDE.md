@@ -317,6 +317,31 @@ manual-fallback mechanism once the real job runs - `resolve_lyrics` itself has n
 video or its description exists, so this is the only way a description-only match actually reaches
 the pipeline (LRCLIB may not have the song at all).
 
+## Finding the song (search box)
+
+The form starts from one **"Song" search box** (`GET /api/search?q=`, `lyrics.search_songs`), not
+separate artist/title fields: LRCLIB has no artist-only search, so the old per-field autocomplete
+sent artist+title as one song query anyway (typing "omer" listed other artists' songs), and it
+silently showed nothing whenever LRCLIB answered 503/429 - which happens often. Now:
+
+- Free text (title and/or artist, any language) -> a list of *songs*, grouped across LRCLIB's
+  many duplicate uploads (case/accent-insensitive artist, title cleaned of video-id and
+  "(Official Video)" suffixes and of a repeated "ARTIST - " prefix; best version kept: synced >
+  plain > no lyrics; instrumentals dropped). Searches retry briefly on 5xx/429 (honoring
+  Retry-After) and are cached in memory for 10 minutes; an outage comes back as `error` so the
+  page can say "busy, retry" instead of an empty list.
+- Each result carries its lyrics and detected language, so **picking one confirms the lyrics**
+  (no "Check lyrics" step) and shows a song card with a "Change" button. The pick's LRCLIB id is
+  sent with the job (`lrclib_id`) and `run_pipeline` fetches exactly that record
+  (`lyrics.fetch_lrclib_by_id`) - pasted lyrics still win over it, a plain artist/title search is
+  the last resort.
+- YouTube links run the search with the video's artist/title and **auto-pick a strong match**
+  (same title, duration within 4s of the video); otherwise the results open for the user to
+  choose, and with no results at all the old path runs (manual fields prefilled + lyrics check,
+  which also looks in the video description). Uploads prefill the search from the file name.
+- "Can't find it? Enter details manually" reveals the artist/title/album fields and the
+  "Check lyrics" button. Editing those fields drops a picked song (and its id).
+
 ## Web app job behavior (lyrics priority, stem cache, preview, errors)
 
 - **Lyrics typed/pasted in the form win over LRCLIB** (`web/pipeline.py`'s `_resolve_job_lyrics`):
