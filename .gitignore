@@ -12,3 +12,6 @@ songs_examples/
 
 # Lyrics written by the app (pasted/edited in the form) - copyrighted, never commit them.
 songs/*/lyrics.txt
+
+# Demo media shown in the README.
+!docs/demo/*.mp4
