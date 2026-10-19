@@ -122,3 +122,11 @@ Run the tests with `.venv/bin/python -m pytest`.
 - Fonts: [Rubik](https://fonts.google.com/specimen/Rubik) and
   [Noto Sans Arabic](https://fonts.google.com/noto/specimen/Noto+Sans+Arabic), SIL Open Font
   License (see `src/karaoke_he/assets/fonts/`)
+
+## License
+
+The code is released under the [MIT License](LICENSE). The bundled fonts keep their own
+license (SIL Open Font License, see `src/karaoke_he/assets/fonts/`), and the demo song keeps
+its CC BY 3.0 license (see above). Karaokit's license covers the code only, not the songs or
+lyrics you use it with.
+

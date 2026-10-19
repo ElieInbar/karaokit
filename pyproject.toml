@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "karaokit"
 version = "0.1.0"
 description = "Turn any song into a karaoke video with a word-by-word highlight (Hebrew, Arabic, English, French, Spanish, Russian)."
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "torch",
