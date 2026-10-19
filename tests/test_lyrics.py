@@ -201,3 +201,53 @@ def test_search_suggestions_respects_limit(monkeypatch):
     results = search_suggestions("a", limit=3)
 
     assert len(results) == 3
+
+
+def test_fetch_from_lrclib_retries_transient_server_errors(monkeypatch):
+    """LRCLIB intermittently answers 503 "ServerOverloaded"; a blip at the lyrics stage
+    shouldn't fail a job that already spent minutes on download/separation."""
+    statuses = iter([503, 503, 200])
+
+    def fake_get(url, params=None, timeout=None):
+        return _FakeResponse(next(statuses), {"plainLyrics": "שלום"})
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    monkeypatch.setattr(lyrics_module, "LRCLIB_RETRY_DELAYS_SEC", (0, 0, 0))
+
+    result = fetch_from_lrclib("artist", "title")
+
+    assert result is not None
+    assert result.text == "שלום"
+
+
+def test_fetch_from_lrclib_gives_up_after_persistent_server_errors(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(url)
+        return _FakeResponse(503, {})
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    monkeypatch.setattr(lyrics_module, "LRCLIB_RETRY_DELAYS_SEC", (0, 0))
+
+    try:
+        fetch_from_lrclib("artist", "title")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected the persistent 503 to propagate")
+    assert len(calls) == 3
+
+
+def test_fetch_from_lrclib_does_not_retry_not_found(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(url)
+        return _FakeResponse(404 if url.endswith("/get") else 200, [] if url.endswith("/search") else {})
+
+    monkeypatch.setattr(lyrics_module.requests, "get", fake_get)
+    monkeypatch.setattr(lyrics_module, "LRCLIB_RETRY_DELAYS_SEC", (0, 0, 0))
+
+    assert fetch_from_lrclib("artist", "title") is None
+    assert calls.count(calls[0]) == 1

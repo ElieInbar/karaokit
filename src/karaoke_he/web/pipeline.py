@@ -92,16 +92,15 @@ def _format_low_confidence_warnings(words: list[WordTimestamp], vocals_path: Pat
     model = None
     warnings = []
     for region in regions:
-        word_label = f"{region.word_count} mot{'s' if region.word_count != 1 else ''}"
-        time_range = f"{region.start:.0f}s-{region.end:.0f}s"
+        word_label = f"{region.word_count} word{'s' if region.word_count != 1 else ''}"
+        time_range = _format_time_range(region.start, region.end)
 
         if _region_overlaps_parentheses(region, words, parenthetical_indices):
             warnings.append(
-                f"Timing potentiellement approximatif vers {time_range} ({word_label}) - ce "
-                "passage correspond à du texte entre parenthèses dans les paroles (souvent des "
-                "chœurs/ad-libs), probablement chanté en même temps que la ligne principale : "
-                "l'alignement ne sait représenter qu'une seule voix à la fois, donc le minutage "
-                "ici peut être décalé même si le texte est bien correct."
+                f"Timing may be approximate around {time_range} ({word_label}) - this part comes "
+                "from parenthesized lyrics (usually backing vocals/ad-libs), probably sung at the "
+                "same time as the main line. Alignment can only follow one voice at a time, so the "
+                "timing here may be off even though the text itself is right."
             )
             continue
 
@@ -110,12 +109,23 @@ def _format_low_confidence_warnings(words: list[WordTimestamp], vocals_path: Pat
             model = model or load_diagnostic_model()
             language, text = transcribe_diagnostic_region(model, vocals_path, region.start, region.end)
             if text:
-                detail = f" — langue probable (indicatif, peu fiable sur du chant) : {language}"
+                detail = f" (possible language, just a hint - unreliable on singing: {language})"
         warnings.append(
-            f"Timing incertain vers {time_range} ({word_label}) - l'audio contient probablement "
-            f"du contenu parlé ou non chanté absent des paroles récupérées{detail}."
+            f"Uncertain timing around {time_range} ({word_label}) - the audio probably contains "
+            f"spoken or unsung content that isn't in the fetched lyrics{detail}."
         )
     return warnings
+
+
+def _format_time(seconds: float) -> str:
+    total = int(round(seconds))
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def _format_time_range(start: float, end: float) -> str:
+    """`m:ss`, or `m:ss–m:ss` when the region spans more than a rounded second."""
+    start_str, end_str = _format_time(start), _format_time(end)
+    return start_str if start_str == end_str else f"{start_str}–{end_str}"
 
 
 def _generate_placeholder_background(duration: float, output_path: Path) -> Path:

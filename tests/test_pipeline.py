@@ -73,8 +73,9 @@ def test_format_low_confidence_warnings_uses_parenthetical_message_for_bracketed
     warnings = _format_low_confidence_warnings(words, Path("/tmp/vocals.wav"), "a (ouh, nanana) b")
 
     assert len(warnings) == 1
-    assert "parenthèses" in warnings[0]
-    assert "chœurs" in warnings[0] or "ad-libs" in warnings[0]
+    assert "parenthesized lyrics" in warnings[0]
+    assert "backing vocals" in warnings[0]
+    assert "0:10–0:11" in warnings[0]
 
 
 def test_format_low_confidence_warnings_uses_generic_message_outside_parentheses(monkeypatch):
@@ -88,5 +89,10 @@ def test_format_low_confidence_warnings_uses_generic_message_outside_parentheses
     warnings = _format_low_confidence_warnings(words, Path("/tmp/vocals.wav"), "bonjour monde")
 
     assert len(warnings) == 1
-    assert "parenthèses" not in warnings[0]
-    assert "contenu parlé ou non chanté" in warnings[0]
+    assert "parenthesized" not in warnings[0]
+    assert "spoken or unsung content" in warnings[0]
+
+
+def test_format_time_range_collapses_same_second_and_uses_minutes():
+    assert pipeline_module._format_time_range(36.2, 36.4) == "0:36"
+    assert pipeline_module._format_time_range(210.7, 224.6) == "3:31–3:45"

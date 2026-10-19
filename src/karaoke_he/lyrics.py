@@ -1,4 +1,5 @@
 import re
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -7,6 +8,12 @@ import requests
 
 LRCLIB_BASE_URL = "https://lrclib.net/api"
 SYNCED_LINE_RE = re.compile(r"^\[\d{2}:\d{2}\.\d{2,3}\]\s?")
+
+# LRCLIB intermittently answers 503 "ServerOverloaded" for a few seconds at a time (seen live:
+# the same request failing, then succeeding a minute later). A job only reaches the lyrics stage
+# after minutes of download/separation work, so a single transient blip there shouldn't throw
+# all of that away - retry server errors and network failures with a short backoff first.
+LRCLIB_RETRY_DELAYS_SEC = (2.0, 5.0, 10.0)
 
 
 class LyricsSource(Enum):
@@ -45,6 +52,23 @@ def _lyrics_result_from_lrclib_payload(payload: dict) -> LyricsResult | None:
     return None
 
 
+def _lrclib_get(path: str, params: dict, timeout: float) -> requests.Response:
+    """`requests.get` against LRCLIB, retried on 5xx responses and connection errors/timeouts
+    (see `LRCLIB_RETRY_DELAYS_SEC`). 4xx responses (including a genuine 404 "not found") are
+    returned immediately, since retrying can't change them."""
+    for delay in (*LRCLIB_RETRY_DELAYS_SEC, None):
+        try:
+            response = requests.get(f"{LRCLIB_BASE_URL}{path}", params=params, timeout=timeout)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            if delay is None:
+                raise
+        else:
+            if response.status_code < 500 or delay is None:
+                return response
+        time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
 def fetch_from_lrclib(
     artist: str,
     title: str,
@@ -59,7 +83,7 @@ def fetch_from_lrclib(
     if duration_sec is not None:
         params["duration"] = round(duration_sec)
 
-    response = requests.get(f"{LRCLIB_BASE_URL}/get", params=params, timeout=timeout)
+    response = _lrclib_get("/get", params, timeout)
     if response.status_code == 200:
         result = _lyrics_result_from_lrclib_payload(response.json())
         if result is not None:
@@ -72,7 +96,7 @@ def fetch_from_lrclib(
     # that title; retry with the track title alone before giving up.
     candidates: list[dict] = []
     for search_params in ({"artist_name": artist, "track_name": title}, {"track_name": title}):
-        search_response = requests.get(f"{LRCLIB_BASE_URL}/search", params=search_params, timeout=timeout)
+        search_response = _lrclib_get("/search", search_params, timeout)
         search_response.raise_for_status()
         candidates = [c for c in search_response.json() if not c.get("instrumental")]
         if candidates:
