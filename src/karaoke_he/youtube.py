@@ -29,6 +29,25 @@ class YouTubeError(RuntimeError):
     region-locked video, invalid URL, network failure), as opposed to an unexpected bug."""
 
 
+def friendly_youtube_error(exc: Exception) -> str:
+    """A short message for the web UI. yt-dlp's own errors are long and full of CLI advice
+    (`--cookies-from-browser`, FAQ links) that means nothing to someone using the web page."""
+    raw = str(exc)
+    if "not a bot" in raw or "Sign in to confirm" in raw:
+        return (
+            "YouTube is temporarily blocking requests from this computer (its anti-bot check, "
+            "usually after many downloads in a row). Wait a while and try again, or upload the "
+            "audio file instead."
+        )
+    if "403" in raw:
+        return "YouTube refused the download - this happens now and then. Try again in a moment."
+    if "Private video" in raw or "unavailable" in raw.lower():
+        return "This video is private or unavailable."
+    if raw.startswith("Not a YouTube URL"):
+        return "That doesn't look like a YouTube link."
+    return "Couldn't get this video from YouTube. Check the link and try again."
+
+
 @dataclass
 class YouTubeMetadata:
     video_id: str

@@ -10,7 +10,13 @@ from karaoke_he.language_detect import detect_language
 from karaoke_he.languages import DEFAULT_LANGUAGE, LANGUAGES
 from karaoke_he.lyrics import fetch_from_lrclib, search_suggestions
 from karaoke_he.web.jobs import JobConflictError, create_job, get_job
-from karaoke_he.youtube import YouTubeError, extract_lyrics_from_description, fetch_youtube_metadata, is_youtube_url
+from karaoke_he.youtube import (
+    YouTubeError,
+    extract_lyrics_from_description,
+    fetch_youtube_metadata,
+    friendly_youtube_error,
+    is_youtube_url,
+)
 
 app = FastAPI(title="Karaokit")
 
@@ -114,7 +120,7 @@ def youtube_metadata_endpoint(url: str) -> dict:
     try:
         metadata = fetch_youtube_metadata(url)
     except YouTubeError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(400, friendly_youtube_error(exc)) from exc
     return {
         "video_id": metadata.video_id,
         "title": metadata.title,

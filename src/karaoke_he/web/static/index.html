@@ -372,18 +372,6 @@
   .lyrics-status.not-found { color: var(--error); }
   .lyrics-status.checking { color: var(--ink-soft); font-weight: 400; }
 
-  .lyrics-preview {
-    margin: -6px 0 20px;
-    padding: 14px 16px;
-    border-left: 3px solid var(--accent);
-    background: var(--hairline);
-    border-radius: 0 10px 10px 0;
-    max-height: 240px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-    font-size: 0.9rem;
-    line-height: 1.6;
-  }
 
   /* --- Job status / result --- */
 
@@ -498,12 +486,12 @@
     <div class="row">
       <div class="field autocomplete">
         <label for="artist">Artist</label>
-        <input type="text" id="artist" name="artist" autocomplete="off" required>
+        <input type="text" id="artist" name="artist" dir="auto" autocomplete="off" required>
         <ul class="suggestions" id="artist-suggestions" hidden></ul>
       </div>
       <div class="field autocomplete">
         <label for="title">Title</label>
-        <input type="text" id="title" name="title" autocomplete="off" required>
+        <input type="text" id="title" name="title" dir="auto" autocomplete="off" required>
         <ul class="suggestions" id="title-suggestions" hidden></ul>
       </div>
     </div>
@@ -532,13 +520,12 @@
         <span>Check lyrics</span>
       </button>
       <span class="lyrics-status" id="lyrics-status" hidden></span>
-      <button type="button" class="secondary" id="review-lyrics-btn" hidden>Review lyrics</button>
+      <button type="button" class="secondary" id="review-lyrics-btn" hidden>Edit lyrics</button>
     </div>
-    <div class="lyrics-preview" id="lyrics-preview" hidden></div>
 
     <div class="field">
-      <label for="lyrics">Your lyrics <span class="hint">(optional — if filled, used instead of LRCLIB's)</span></label>
-      <textarea id="lyrics" name="lyrics" rows="6" placeholder="Paste lyrics here if the song isn't on LRCLIB, or to correct LRCLIB's version"></textarea>
+      <label for="lyrics">Your lyrics <span class="hint" id="lyrics-hint">(optional — if filled, used instead of LRCLIB's)</span></label>
+      <textarea id="lyrics" name="lyrics" rows="6" dir="auto" placeholder="Paste lyrics here if the song isn't on LRCLIB, or to correct LRCLIB's version"></textarea>
     </div>
 
     <button type="submit" id="generate-btn" disabled title="Check lyrics (or paste them below) first">
@@ -614,6 +601,10 @@ function setupAutocomplete(inputId, listId) {
   let activeIndex = -1;
 
   function hide() {
+    // Also drop any search still in flight: a late response would otherwise reopen the list
+    // after Escape/blur, on top of whatever the user clicks next.
+    clearTimeout(debounceTimer);
+    if (abortController) abortController.abort();
     list.hidden = true;
     list.innerHTML = "";
     activeIndex = -1;
@@ -656,7 +647,8 @@ function setupAutocomplete(inputId, listId) {
       try {
         const res = await fetch(`/api/suggestions?q=${encodeURIComponent(query)}`, { signal: abortController.signal });
         if (!res.ok) return;
-        render(await res.json());
+        const suggestions = await res.json();
+        if (document.activeElement === input) render(suggestions);
       } catch (err) {
         if (err.name !== "AbortError") hide();
       }
@@ -713,7 +705,23 @@ document.getElementById("source-file").addEventListener("change", applySourceMod
 document.getElementById("source-youtube").addEventListener("change", applySourceMode);
 applySourceMode();
 
-fetchYoutubeBtn.addEventListener("click", async () => {
+const YOUTUBE_URL_RE = /^(https?:\/\/)?((www|m|music)\.)?(youtube\.com\/(watch\?|shorts\/|live\/)|youtu\.be\/)\S+/i;
+let lastFetchedUrl = null;
+let youtubeDebounce = null;
+
+// Pasting (or finishing typing) a YouTube link fetches its info right away - the "Fetch info"
+// button stays as a manual retry.
+youtubeUrlInput.addEventListener("input", () => {
+  clearTimeout(youtubeDebounce);
+  const url = youtubeUrlInput.value.trim();
+  if (!YOUTUBE_URL_RE.test(url) || url === lastFetchedUrl) return;
+  youtubeDebounce = setTimeout(fetchYoutubeInfo, 400);
+});
+
+fetchYoutubeBtn.addEventListener("click", fetchYoutubeInfo);
+
+async function fetchYoutubeInfo() {
+  clearTimeout(youtubeDebounce);
   const url = youtubeUrlInput.value.trim();
   if (!url) {
     youtubeStatus.hidden = false;
@@ -731,18 +739,20 @@ fetchYoutubeBtn.addEventListener("click", async () => {
     const res = await fetch(`/api/youtube-metadata?url=${encodeURIComponent(url)}`);
     if (!res.ok) throw new Error(await errorMessage(res));
     const data = await res.json();
+    lastFetchedUrl = url;
     artistInput.value = data.suggested_artist;
     titleInput.value = data.suggested_title;
     resetLyricsCheck();
     youtubeStatus.className = "lyrics-status found";
-    youtubeStatus.textContent = `✓ "${data.title}" — confirm the artist/title below, then check lyrics.`;
+    youtubeStatus.textContent = `✓ "${data.title}" — check the artist and title below.`;
+    checkLyrics();
   } catch (err) {
     youtubeStatus.className = "lyrics-status not-found";
     youtubeStatus.textContent = "Could not fetch video info: " + err.message;
   } finally {
     setBusy(fetchYoutubeBtn, false);
   }
-});
+}
 
 // --- Lyrics check gate: the "Generate" button stays disabled until lyrics are either found on
 // LRCLIB (confirmed via this check) or pasted manually into the lyrics textarea. ---
@@ -754,13 +764,24 @@ const lyricsTextarea = document.getElementById("lyrics");
 const checkLyricsBtn = document.getElementById("check-lyrics-btn");
 const lyricsStatus = document.getElementById("lyrics-status");
 const reviewLyricsBtn = document.getElementById("review-lyrics-btn");
-const lyricsPreview = document.getElementById("lyrics-preview");
+const lyricsHint = document.getElementById("lyrics-hint");
+const LYRICS_HINT_DEFAULT = lyricsHint.textContent;
 const generateBtn = document.getElementById("generate-btn");
 const languageSelect = document.getElementById("language");
 const languageDetectedHint = document.getElementById("language-detected-hint");
 
 let lyricsConfirmed = false;
 let lastCheckedText = null;
+// Text this page put into the lyrics field itself (from a lyrics check), as opposed to text the
+// user typed: if the song changes, auto-filled lyrics belong to the *old* song and must go.
+let autoFilledLyrics = null;
+
+function fillLyricsField(text, hint) {
+  lyricsTextarea.value = text;
+  autoFilledLyrics = text;
+  lyricsHint.textContent = hint;
+  updateGenerateButtonState();
+}
 // Once the user picks a language themselves, stop overriding it with a detected guess - the
 // detection is a convenience default, not something that should fight the user's own choice.
 let languageManuallySet = false;
@@ -780,15 +801,28 @@ function resetLyricsCheck() {
   lastCheckedText = null;
   lyricsStatus.hidden = true;
   reviewLyricsBtn.hidden = true;
-  lyricsPreview.hidden = true;
   languageDetectedHint.textContent = "";
+  if (autoFilledLyrics !== null && lyricsTextarea.value === autoFilledLyrics) {
+    lyricsTextarea.value = "";
+    lyricsHint.textContent = LYRICS_HINT_DEFAULT;
+  }
+  autoFilledLyrics = null;
   updateGenerateButtonState();
 }
 
 [artistInput, titleInput, albumInput].forEach(el => el.addEventListener("input", resetLyricsCheck));
-lyricsTextarea.addEventListener("input", updateGenerateButtonState);
+lyricsTextarea.addEventListener("input", () => {
+  if (autoFilledLyrics !== null && lyricsTextarea.value !== autoFilledLyrics) {
+    autoFilledLyrics = null;
+    lyricsHint.textContent = "(edited — your version will be used)";
+  }
+  if (!lyricsTextarea.value.trim()) lyricsHint.textContent = LYRICS_HINT_DEFAULT;
+  updateGenerateButtonState();
+});
 
-checkLyricsBtn.addEventListener("click", async () => {
+checkLyricsBtn.addEventListener("click", checkLyrics);
+
+async function checkLyrics() {
   const artist = artistInput.value.trim();
   const title = titleInput.value.trim();
   if (!artist || !title) {
@@ -803,7 +837,6 @@ checkLyricsBtn.addEventListener("click", async () => {
   lyricsStatus.className = "lyrics-status checking";
   lyricsStatus.textContent = "Checking lyrics...";
   reviewLyricsBtn.hidden = true;
-  lyricsPreview.hidden = true;
 
   try {
     const params = new URLSearchParams({ artist, title });
@@ -822,11 +855,11 @@ checkLyricsBtn.addEventListener("click", async () => {
       lyricsStatus.className = "lyrics-status found";
       if (data.source === "youtube_description") {
         lyricsStatus.textContent = "✓ Lyrics found in the video description";
-        lyricsTextarea.value = data.text;
+        fillLyricsField(data.text, "(from the video description — edit freely, this version will be used)");
       } else {
         lyricsStatus.textContent = `✓ Lyrics found on LRCLIB${data.synced ? " (synced)" : ""}`;
+        reviewLyricsBtn.hidden = false;
       }
-      reviewLyricsBtn.hidden = false;
 
       const option = data.detected_language && languageSelect.querySelector(`option[value="${data.detected_language}"]`);
       if (option) {
@@ -849,14 +882,22 @@ checkLyricsBtn.addEventListener("click", async () => {
     setBusy(checkLyricsBtn, false);
     updateGenerateButtonState();
   }
-});
+}
 
+// Loads LRCLIB's lyrics into the editable field: whatever is there when generating is what gets
+// used (the backend gives pasted lyrics priority over LRCLIB), so fixing a typo is just editing.
 reviewLyricsBtn.addEventListener("click", () => {
   if (lastCheckedText === null) return;
-  const showing = !lyricsPreview.hidden;
-  lyricsPreview.hidden = showing;
-  reviewLyricsBtn.textContent = showing ? "Review lyrics" : "Hide lyrics";
-  if (!showing) lyricsPreview.textContent = lastCheckedText;
+  const current = lyricsTextarea.value.trim();
+  if (current && current !== (autoFilledLyrics || "").trim() &&
+      !confirm("Replace the lyrics already in the field with LRCLIB's version?")) {
+    return;
+  }
+  fillLyricsField(lastCheckedText, "(from LRCLIB — edit freely, this version will be used)");
+  reviewLyricsBtn.hidden = true;
+  lyricsTextarea.focus();
+  lyricsTextarea.setSelectionRange(0, 0);
+  lyricsTextarea.scrollIntoView({ behavior: "smooth", block: "center" });
 });
 
 function progressPercent(stage, detail) {

@@ -10,7 +10,7 @@ import requests
 from karaoke_he.alignment import AlignmentError
 from karaoke_he.languages import DEFAULT_LANGUAGE
 from karaoke_he.web.pipeline import PipelineError, run_pipeline
-from karaoke_he.youtube import YouTubeError
+from karaoke_he.youtube import YouTubeError, friendly_youtube_error
 
 FINISHED_STATUSES = {"done", "error"}
 
@@ -26,9 +26,7 @@ def user_facing_error(exc: Exception, stage: str) -> str:
     if isinstance(exc, requests.exceptions.RequestException):
         return "The lyrics service (LRCLIB) isn't responding right now. Try again in a few minutes."
     if isinstance(exc, YouTubeError):
-        if "403" in str(exc):
-            return "YouTube refused the download - this happens now and then. Try again in a moment."
-        return "Couldn't download the audio from YouTube. Check the link and try again."
+        return friendly_youtube_error(exc)
     if isinstance(exc, (PipelineError, AlignmentError)):
         return str(exc)
     return f"Something went wrong during the {stage.replace('_', ' ')} step. Details are in the server log."

@@ -323,6 +323,12 @@ the pipeline (LRCLIB may not have the song at all).
 - **In-browser preview**: the `.mkv`'s PCM audio can't be played by browsers (and Safari can't play
   `.mkv` at all), so the pipeline also writes `<slug>_preview.mp4` (video stream copied, instrumental
   as AAC) served by `GET /jobs/{id}/preview`; the `.mkv` stays the download.
+- **Fewer clicks, editable lyrics** (frontend only): pasting a YouTube link fetches its info and
+  then checks lyrics automatically ("Fetch info" stays as a manual retry). "Edit lyrics" loads
+  LRCLIB's text into the "Your lyrics" field, which - per the priority rule above - is exactly
+  what the job will use. Text the page auto-filled (from LRCLIB or a video description) is
+  cleared again if the artist/title changes, so one song's lyrics can't leak into another job;
+  text the user typed is never auto-cleared.
 - **One running job per song**: `POST /jobs` answers 409 while another job for the same slug is
   still running, since both would write into the same `work/<slug>/`.
 - **User-facing errors**: `web/jobs.py`'s `user_facing_error` turns exceptions into readable

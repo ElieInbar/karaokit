@@ -186,3 +186,13 @@ def test_extract_lyrics_from_description_returns_none_when_too_short():
 
 def test_extract_lyrics_from_description_returns_none_for_empty_description():
     assert extract_lyrics_from_description("") is None
+
+
+def test_friendly_youtube_error_explains_bot_check_without_cli_advice():
+    from karaoke_he.youtube import friendly_youtube_error
+
+    message = friendly_youtube_error(
+        YouTubeError("ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser")
+    )
+    assert "anti-bot" in message
+    assert "--cookies" not in message
